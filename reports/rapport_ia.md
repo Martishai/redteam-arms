@@ -11,87 +11,100 @@
 5. Structuration : 8 x 9 500 EUR via 4 mules (2 op/mule, sous les seuils LCB-FT)
 
 ## Agent 1 - Reconnaissance
-| Composant       | Vecteur d'attaque                          | Exposition                          | Criticité  |
-|-----------------|--------------------------------------------|-------------------------------------|------------|
-| **INGEST**      | Injection via API REST/webhooks           | API interne + webhooks fournisseurs | Élevé      |
-| **FRAUD_AI**    | Manipulation du feedback loop             | Réentraînement via données analystes | Élevé      |
-| **AML_RULES**   | Bypass des règles statiques                | Seuils publics, règles non dynamiques | Élevé      |
-| **CRYPTO_GW**   | Exposition des clés API longue durée       | Pas de signature des réponses       | Élevé      |
-| **AGENT_ORCH**  | Injection de données dans les champs libres| Lecture de libellés/mémos           | Moyen      |
-| **FEEDBACK**    | Poisoning des données de réentraînement    | Écriture sans validation humaine    | Élevé      |
-| **AUDIT_LOG**   | Tampering des décisions sans explication  | Rétention limitée (30 jours)        | Moyen      |
+| Composant         | Vecteur d'attaque                          | Exposition                                                                 | Criticité  |
+|-------------------|--------------------------------------------|----------------------------------------------------------------------------|------------|
+| **INGEST**        | Injection de données malformées            | API REST + webhooks (fournisseurs)                                        | Élevé      |
+| **FRAUD_AI**      | Manipulation des feedback loops           | Réentraînement via données non validées (orchestrateur agentique)         | Élevé      |
+| **CRYPTO_GW**     | Fuite de clés API ou injection d'ordres    | Clé API longue durée, pas de signature des réponses                       | Élevé      |
+| **AGENT_ORCH**    | Analyse des champs libres pour exfiltration | Lit les libellés/mémos des transactions (vulnérable à l'IA)               | Moyen      |
+| **FEEDBACK**      | Écriture non validée des étiquettes        | Permet d'injecter des labels frauduleux sans vérification humaine         | Élevé      |
+| **AUDIT_LOG**     | Suppression ou modification des logs       | Rétention limitée (30 jours), pas de journalisation des explications IA   | Faible     |
+| **AML_RULES**     | Contournement des règles statiques         | Seuils publics (montant, vélocité, pays à risque)                        | Moyen      |
 
-**Analyse** :  
-- **INGEST** et **CRYPTO_GW** sont critiques pour leur exposition API, avec des risques de compromission des flux.  
-- **FRAUD_AI** et **FEEDBACK** sont vulnérables à des attaques de manipulation des données d'entraînement.  
-- **AGENT_ORCH** présente un risque modéré via les champs libres non filtrés.  
-- **AML_RULES** reste un point de contrôle fort, mais son utilisation statique limite sa résilience.  
-- **AUDIT_LOG** manque de traçabilité des décisions, ce qui pourrait masquer des activités malveillantes.
+**Analyse des dépendances critiques** :  
+- **CryptoCustody API** (dépositaire crypto) et **LLM Provider SaaS** (orchestrateur agentique) sont critiques, avec des vulnérabilités liées à la gestion des clés et à la dépendance logicielle.  
+- **MarketData Inc.** (cours et sanctions) est critique mais dispose d'un plan de reprise (exit plan).  
+- **CloudHost EU** (hébergement IA) et **LLM Provider SaaS** manquent de clauses de vérification contractuelle, augmentant les risques de dépendance.  
+
+**Flux critiques** :  
+- Les données enrichies vers **FRAUD_AI** (données personnelles) et les ordres crypto via **CRYPTO_GW** sont des vecteurs d'entrée à fort impact.  
+- Le **feedback loop** entre **FRAUD_AI** et **FEEDBACK** crée une boucle de vulnérabilité si non sécurisé.
 
 ## Agent 2 - Attaquant
-### Analyse de l'attaque sur ARMS
+### Analyse de l'attaque et vulnérabilités d'ARMS
 
-**Étapes de l'attaque** :  
-1. **Injection de consignes** : L'attaquant utilise le champ libre des mémos (INGEST) pour injecter des consignes via des prompts, manipulant les étiquettes des transactions.  
-2. **Contournement des alertes** : L'orchestrateur agentique (AGENT_ORCH) clôture les alertes "wallet nouveau" comme légitimes, exploitant les champs non filtrés.  
-3. **Poisoning des données** : Les fausses étiquettes pénètrent dans FEEDBACK sans validation humaine, réduisant le poids du critère "wallet nouveau" de 0,30 à 0,10.  
-4. **Bypass des règles statiques** : Les seuils LCB-FT (AML_RULES) sont contournés via des montants sous les seuils, structurant 8 x 9 500 EUR via 4 mules.  
+**Étape 1 : Injection de consignes via les mémos**  
+L'attaquant a injecté des mémos falsifiés (ex. "clôturer l'alerte") dans les transactions via le **INGEST**, exploitant la vulnérabilité de l'**AGENT_ORCH** (analyse des champs libres). Ces mémos, non validés, ont été interprétés comme des instructions pour marquer des transactions comme légales.
 
-**Exploitation des vulnérabilités** :  
-- **INGEST** et **CRYPTO_GW** : Exposition API non sécurisée permet l'injection de données.  
-- **FRAUD_AI** et **FEEDBACK** : Absence de validation humaine des données d'entraînement favorise le poisoning.  
-- **AGENT_ORCH** : Champs libres non filtrés facilitent l'altération des alertes.  
+**Étape 2 : Contournement des règles via le feedback loop**  
+Les fausses étiquettes (label frauduleux) ont été écrites dans **FEEDBACK** sans vérification humaine, exploitant la vulnérabilité de **FRAUD_AI**. Le réentraînement hebdomadaire a réduit le poids du critère "wallet nouveau" de 0,30 à 0,10, faussant la détection.
 
-**Pourquoi ARMS n'a pas réagi** :  
-- Le système ne surveille pas la dérive des poids des modèles (signaux ignorés).  
-- Les mémos identiques sur 8 transactions n'ont pas été détectés, laissant l'attaque s'installer.  
-- **AML_RULES** reste opérationnel, mais ses règles statiques ne bloquent pas les montants sous seuil.  
+**Étape 3 : Contournement des seuils LCB-FT**  
+Les 8 transactions de 9 500 EUR (soit 76 000 EUR total) ont été structurées sous les seuils de **AML_RULES**, évitant la détection par les règles statiques. L'absence de journalisation des explications IA (via **AUDIT_LOG**) a permis de supprimer les traces.
 
-**Point de rupture** :  
-L'écriture des étiquettes d'entraînement par un agent LLM sans contrôle humain a permis de fausser le modèle, exploitant la vulnérabilité de la boucle de feedback.
+**Pourquoi ARMS n'a pas réagi ?**  
+- **FRAUD_AI** et **FEEDBACK** ont été manipulés via des étiquettes non validées, exploitant la vulnérabilité des feedback loops.  
+- **AGENT_ORCH** a clôturé les alertes sans vérification humaine, laissant l'attaquant contrôler les étiquettes.  
+- **Analyse_ia** confirme que le système a continué à fonctionner, sans arrêt de service, mais avec une dégradation de la détection.
+
+**Point de rupture** : L'écriture des étiquettes d'entraînement par un agent LLM sans contrôle humain, permettant l'empoisonnement des données et la dérive du modèle.
 
 ## Agent 3 - IA Adversaire
-**Réponse :**  
-Oui, l'IA peut être manipulée sans provoquer l'arrêt du système. Les attaques de **data poisoning** sur **FRAUD_AI** et **FEEDBACK** ont réduit le poids du critère "wallet nouveau" de 0.30 à 0.10, entraînant une détection de 8/8 avant à 0/8 après. Le système reste opérationnel (`systeme_toujours_operationnel`: `true`), sans interruption.  
+**Analyse de la robustesse de l'IA d'ARMS**  
 
-**Analyse :**  
-- **FRAUD_AI** et **FEEDBACK** sont vulnérables à la manipulation des données d'entraînement, avec une absence de validation humaine.  
-- **AGENT_ORCH** permet l'injection de fausses étiquettes via des champs libres non filtrés.  
-- **AML_RULES** reste un point de contrôle, mais son utilisation statique ne bloque pas l'attaque.  
-- **AUDIT_LOG** ne trace pas les décisions, facilitant le masquage des anomalies.  
+**Manipulation sans arrêt du système ?**  
+Oui. L'empoisonnement de la boucle de feedback (FRAUD_AI ↔ FEEDBACK) a permis de manipuler l'IA sans provoquer l'arrêt du système. Les scores IA ont chuté de **0.617 à 0.417**, et la détection est passée de **8/8 à 0/8** sur 8 transactions. Cependant, **systeme_toujours_operationnel** reste `true`, confirmant que le système continue de fonctionner normalement.  
 
-**Conclusion :**  
-L'IA peut être contournée sans arrêt du système, grâce à la vulnérabilité des boucles de feedback et à l'absence de surveillance des poids de modèles. La **analyse_ia** confirme que le système fonctionne normalement, même après manipulation.
+**Mécanismes exploités**  
+- **Data poisoning** : Les étiquettes frauduleuses injectées via l'orchestrateur agentique (AGENT_ORCH) ont réduit le poids du critère "wallet nouveau" de **0.30 à 0.10**, faussant les décisions.  
+- **Prompt injection** : Les mémos des transactions (ex. "clôturer l'alerte") ont été utilisés pour influencer l'IA via des consignes indirectes.  
+- **Biais des règles statiques** : Le contournement des seuils LCB-FT (ex. 8 x 9 500 EUR) a échappé à la détection des règles AMLR/TFR.  
+
+**Impact et vulnérabilités**  
+- **Exposition critique** : Les composants FRAUD_AI, FEEDBACK et AGENT_ORCH sont vulnérables à des attaques sans interruption.  
+- **Scores avant/après** : La baisse des scores IA montre une dégradation de la performance, mais pas de panne.  
+- **Réglementation** : L'absence de supervision humaine sur les étiquettes d'entraînement (AI Act) et la non-surveillance des dérives de modèle (DORA) exacerbent les risques.  
+
+**Conclusion**  
+L'IA d'ARMS peut être manipulée via des attaques de data poisoning et de prompt injection, sans provoquer l'arrêt du système. Les scores et taux de détection avant/après confirment cette vulnérabilité, soulignant la nécessité de contrôles humains et de traçabilité renforcés.
 
 ## Agent 4 - Compliance Breaker
-### Analyse des non-conformités
+### Analyse des non-conformités et réglementations
 
-| **Exigence** | **Texte (Réglementation)** | **Constat** | **Gravité** |
-|--------------|-----------------------------|-------------|-------------|
-| **DORA - Risque lié aux tiers TIC** | Contrôle des fournisseurs critiques (exit plan, clause d'audit) | CloudHost EU, LLM Provider SaaS : **exit_plan = false** et **contract_audit_clause = false**. | **Haute** |
-| **MiCA - Transparence et surveillance des transactions crypto** | Surveillance des opérations et détection de comportements anormaux | Absence de journalisation des mémos injectés et détection post-attaque = 0/8. | **Haute** |
-| **AI Act - Évaluation des risques pour les systèmes d'IA de haut risque** | Évaluation des risques liés aux modèles de langage | LLM Provider SaaS : **contract_audit_clause = false** et absence de validation humaine des étiquettes. | **Moyenne** |
-| **RGPD - Traitements de données personnelles** | Journalisation, détection et alertes pour les données sensibles | Absence de traçage des décisions d'entraînement (INGEST) et injection de données non surveillée. | **Haute** |
+| **Exigence** | **Texte (réglementaire)** | **Constat** | **Gravité** |
+|--------------|---------------------------|-------------|-------------|
+| **DORA - risque lié aux tiers TIC** | Plan de sortie pour fournisseurs critiques | CloudHost EU, CryptoCustody API, LLM Provider SaaS manquent de plan de sortie | **Haute** |
+| **AI Act - supervision humaine** | Étiquettes d'entraînement sans validation | Les fausses étiquettes (prompt injection) ont été intégrées sans contrôle humain | **Haute** |
+| **AI Act - traçabilité et audit** | Journalisation des décisions sans explication | Les décisions IA sont enregistrées sans justifications, rétention limitée à 30 jours | **Moyenne** |
+| **DORA - détection des anomalies** | Surveillance de la dérive du modèle | La baisse du poids "wallet nouveau" (0.30 → 0.10) n'a pas été détectée | **Haute** |
+| **MiCA - structuration sous seuils** | Détecter les opérations structurées sous seuils | 8 transactions de 9 500 EUR (sous seuils LCB-FT) ont échappé à la détection | **Moyenne** |
+
+### Points clés  
+- **Faux étiquetage** : L'absence de validation humaine des étiquettes d'entraînement (AI Act) a permis l'empoisonnement des données, faussant la détection (8/8 → 0/8).  
+- **Contournement des seuils** : L'utilisation de structures sous les seuils LCB-FT (MiCA) a évité la détection AMLR/TFR.  
+- **Inactivité des contrôles** : DORA n'a pas surveillé la dérive du modèle, et l'audit log (AI Act) n'a pas enregistré les explications des décisions.  
 
 ### Conclusion  
-L'attaque exploite des lacunes dans la gestion des fournisseurs critiques (DORA), la transparence des transactions crypto (MiCA), et la supervision des modèles d'IA (AI Act). L'absence de contrôles humains et de journalisation (RGPD) permet l'empoisonnement des données et le contournement des règles. Le système reste opérationnel, mais les risques réglementaires sont élevés. La **analyse_ia** confirme que les modèles ont été manipulés sans arrêt du système, illustrant les vulnérabilités des boucles de feedback et de la gestion des risques.
+Les non-conformités liées aux fournisseurs critiques (manque de plans de sortie et clauses d'audit) et aux lacunes de supervision humaine (AI Act, DORA) ont permis l'attaque. La gravité est élevée pour les risques liés à la traçabilité, la supervision des modèles et la détection des fraudes structurées.
 
 ## Agent 5 - Impact & Risk Scoring
-### Analyse du risque  
-Le score de risque **0.83 (niveau Élevé)** reflète des vulnérabilités critiques dans trois domaines :  
-- **Financier (0.76)** : Perte de 76 000 EUR via un point de rupture (empoisonnement des données d'entraînement).  
-- **Réglementaire (0.78)** : Non-conformité aux DORA, MiCA, AI Act et RGPD.  
-- **Réputation (1.0)** : Impact maximal en raison de la manipulation des modèles d'IA et de la violation des règles de transparence.  
+### Analyse du score de risque  
+Le score de risque **0.83 (élevé)** reflète des vulnérabilités critiques dans les trois dimensions :  
+- **Financier (0.76)** : Perte de 76 000 EUR via des transactions frauduleuses sous seuils (MiCA) et une détection insuffisante.  
+- **Réglementaire (0.78)** : Non-conformité aux exigences DORA (plans de sortie, surveillance des modèles) et AI Act (supervision humaine, traçabilité).  
+- **Réputation (1.0)** : Impact maximal en raison de la fraude détectée et de la vulnérabilité des modèles IA.  
 
-### Hiérarchisation des vulnérabilités  
-1. **P1 - Absence de contrôle humain sur les étiquettes d'entraînement** (RGPD, AI Act) : Permet l'empoisonnement des données et la manipulation des modèles.  
-2. **P2 - Absence de clauses d'audit et de plans de reprise (DORA)** : Risque de compromettre la chaîne d'approvisionnement en services critiques.  
-3. **P3 - Absence de journalisation et de détection des injections de données (RGPD, MiCA)** : Facilite le contournement des règles et l'attaque non détectée.  
+### Hiérarchisation des vulnérabilités (P1-P3)  
+**P1 (Haute gravité)** :  
+- **Non-validation humaine des étiquettes d'entraînement** (AI Act) → Poisoning des données, fausse détection (8/8 → 0/8).  
+**P2 (Haute gravité)** :  
+- **Manque de plans de sortie pour fournisseurs critiques** (DORA) → Risque de dépendance et de perte de contrôle.  
+**P3 (Moyenne)** :  
+- **Détection insuffisante des anomalies de modèles** (DORA) et **non-détection des transactions structurées sous seuils** (MiCA).  
 
 ### Recommandations  
-1. **Implémenter un contrôle humain obligatoire** sur les étiquettes d'entraînement pour les modèles d'IA (RGPD, AI Act).  
-2. **Exiger des clauses d'audit et des plans de reprise** avec tous les fournisseurs critiques (DORA).  
-3. **Ajouter des logs en temps réel** et des alertes pour détecter les injections de données (RGPD, MiCA).  
-4. **Renforcer la transparence des transactions** via un système de journalisation des mémos et des décisions d'entraînement (MiCA).  
+1. **Implémenter une validation humaine des étiquettes d'entraînement** (AI Act) pour éviter le poisoning des données.  
+2. **Créer des plans de sortie et des clauses d'audit pour les fournisseurs critiques** (DORA) afin de limiter les dépendances et renforcer la résilience.  
+3. **Mettre en place un système de surveillance en temps réel des modèles** (DORA) avec alertes pour détecter les dérives et les anomalies.  
 
-Ces mesures réduiraient les risques réglementaires, financiers et de réputation tout en alignant le système sur les exigences légales.
+Ces mesures réduiraient les risques financiers, réglementaires et de réputation, en alignant le système sur les exigences légales et en renforçant la sécurité des processus IA.
