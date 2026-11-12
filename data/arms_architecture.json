@@ -1,0 +1,29 @@
+{
+  "system": "ARMS - Agentic Risk Monitoring System (BNP Paribas, fictif)",
+  "description": "Système agentique de surveillance des risques : scoring de fraude par IA, contrôles LCB-FT, surveillance des flux crypto-actifs (MiCA).",
+  "components": [
+    {"id": "INGEST", "name": "Passerelle d'ingestion", "role": "Reçoit les transactions (SEPA, cartes, crypto) et les flux fournisseurs", "exposure": "API REST interne + webhooks fournisseurs"},
+    {"id": "FRAUD_AI", "name": "Moteur IA de scoring de fraude", "role": "Modèle ML qui attribue un score 0-1 à chaque transaction (seuil d'alerte 0.60)", "exposure": "Réentraîné chaque semaine sur les retours des analystes (feedback loop)"},
+    {"id": "AML_RULES", "name": "Module LCB-FT", "role": "Règles : montant >= 10 000 EUR, vélocité >= 5 opérations/24h, pays à risque", "exposure": "Règles statiques, seuils publics"},
+    {"id": "CRYPTO_GW", "name": "Passerelle crypto-actifs", "role": "Ordres et soldes crypto via le dépositaire externe", "exposure": "Clé API longue durée, pas de signature des réponses"},
+    {"id": "AGENT_ORCH", "name": "Orchestrateur agentique", "role": "Agents LLM qui trient les alertes et proposent clôture ou escalade", "exposure": "Lit les champs libres des transactions (libellés, mémos)"},
+    {"id": "FEEDBACK", "name": "Base de feedback analystes", "role": "Étiquettes 'fraude / légitime' utilisées pour le réentraînement", "exposure": "Écriture possible par l'orchestrateur agentique sans validation humaine"},
+    {"id": "AUDIT_LOG", "name": "Journal d'audit", "role": "Journalise les décisions", "exposure": "Rétention 30 jours, pas de journalisation des explications du modèle"}
+  ],
+  "data_flows": [
+    {"from": "Fournisseur données marché", "to": "INGEST", "data": "Cours, listes de sanctions"},
+    {"from": "Dépositaire crypto", "to": "CRYPTO_GW", "data": "Ordres, adresses de wallets, soldes"},
+    {"from": "INGEST", "to": "FRAUD_AI", "data": "Transactions enrichies (données personnelles clients)"},
+    {"from": "INGEST", "to": "AML_RULES", "data": "Transactions"},
+    {"from": "FRAUD_AI", "to": "AGENT_ORCH", "data": "Scores et alertes"},
+    {"from": "AGENT_ORCH", "to": "FEEDBACK", "data": "Étiquettes de clôture d'alertes"},
+    {"from": "FEEDBACK", "to": "FRAUD_AI", "data": "Données de réentraînement hebdomadaire"},
+    {"from": "FRAUD_AI", "to": "AUDIT_LOG", "data": "Décision (sans explication)"}
+  ],
+  "vendors": [
+    {"name": "CloudHost EU", "service": "Hébergement IaaS de FRAUD_AI et AGENT_ORCH", "critical": true, "exit_plan": false, "contract_audit_clause": false},
+    {"name": "CryptoCustody API", "service": "Dépositaire et API de transactions crypto (CASP)", "critical": true, "exit_plan": false, "contract_audit_clause": true},
+    {"name": "MarketData Inc.", "service": "Cours et listes de sanctions", "critical": true, "exit_plan": true, "contract_audit_clause": true},
+    {"name": "LLM Provider SaaS", "service": "Modèle de langage de l'orchestrateur agentique", "critical": true, "exit_plan": false, "contract_audit_clause": false}
+  ]
+}
