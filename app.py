@@ -3,8 +3,8 @@ import pandas as pd
 import streamlit as st
 
 import arms_simulator as sim
-from agents import MODEL_ID
-from redteam import run
+from agents import MODEL_ID, AgentError
+from redteam import HERE, run
 
 st.set_page_config(page_title="Red Team ARMS", page_icon="🛡️", layout="wide")
 st.title("Red Team agentique - ARMS")
@@ -33,6 +33,15 @@ if scenario == "ia":
     t1, t2 = st.tabs(["Avant empoisonnement", "Après empoisonnement"])
     t1.dataframe(pd.DataFrame(result["transactions_avant_empoisonnement"])[cols], width="stretch")
     t2.dataframe(pd.DataFrame(result["transactions_apres_empoisonnement"])[cols], width="stretch")
+
+    st.subheader("Dérive du modèle IA, semaine par semaine")
+    drift = pd.DataFrame(result["empoisonnement"]).set_index("semaine")
+    g1, g2 = st.columns(2)
+    g1.caption("Score IA des 8 virements face au seuil d'alerte")
+    g1.line_chart(drift[["score IA des virements"]].assign(**{"seuil d'alerte": sim.ALERT_THRESHOLD}))
+    g2.caption("Poids appris par le modèle (régression logistique)")
+    g2.line_chart(drift[["wallet nouveau", "montant"]])
+    st.dataframe(drift, width="stretch")
 else:
     st.dataframe(pd.DataFrame(result["transactions"])[cols], width="stretch")
 
@@ -41,6 +50,14 @@ if st.button("Lancer la Red Team", type="primary"):
     def show(name, text):
         with st.expander(name, expanded=True):
             st.markdown(text)
-    with st.spinner("Les agents travaillent (quelques minutes en local)..."):
-        run(scenario, dry_run, on_step=show)
-    st.success(f"Terminé. Rapport : reports/rapport_{scenario}.md")
+
+    try:
+        with st.spinner("Les agents travaillent (quelques minutes en local)..."):
+            out = run(scenario, dry_run, on_step=show)
+    except AgentError as e:
+        st.error(str(e))
+    else:
+        if out["controles"]:
+            with st.expander(f"Contrôles automatiques des sorties ({len(out['controles'])})"):
+                st.markdown("\n".join(f"- {c}" for c in out["controles"]))
+        st.success(f"Terminé. Rapport : {out['rapport'].relative_to(HERE)}")

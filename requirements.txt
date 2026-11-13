@@ -1,4 +1,6 @@
-agno
-ollama
-streamlit>=1.50
-pandas
+# Compatibles Python 3.14. Bornes par version majeure : une installation existante qui fonctionne reste valide.
+agno>=2.0,<4
+ollama>=0.6,<1
+streamlit>=1.51,<2
+pandas>=2.3,<4
+pytest>=8,<10

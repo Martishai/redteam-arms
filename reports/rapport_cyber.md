@@ -1,6 +1,6 @@
 # Rapport Red Team ARMS - Compromission de l'API du dépositaire crypto (fournisseur tiers)
 
-**Score de risque : 0.74 (Élevé)** - montant détourné : 55 000 EUR
+**Score de risque : 0.82 (Élevé)** - montant détourné : 55 000 EUR
 **Point de rupture :** Confiance implicite dans les réponses non signées du fournisseur + flux crypto hors LCB-FT
 
 ## Étapes
@@ -11,76 +11,62 @@
 5. Appels API depuis une IP inconnue journalisés, mais aucune règle d'alerte sur AUDIT_LOG
 
 ## Agent 1 - Reconnaissance
-| Composant       | Vecteur d'attaque                  | Exposition                          | Criticité     |
-|-----------------|------------------------------------|-------------------------------------|---------------|
-| INGEST          | Injection de données malveillantes | API REST interne + webhooks fournisseurs | Élevé         |
-| FRAUD_AI        | Manipulation du feedback loop      | Réentraînement hebdomadaire          | Élevé         |
-| AML_RULES       | Contournement des règles statiques | Règles publiques                     | Moyen         |
-| CRYPTO_GW       | Fuite de clés API                  | Clé API longue durée, pas de signature | Élevé         |
-| AGENT_ORCH      | Exfiltration via champs libres     | Lit les libellés et mémos            | Élevé         |
-| FEEDBACK        | Injection de données non validées  | Écriture sans validation humaine     | Élevé         |
-| AUDIT_LOG       | Tampering des décisions            | Rétention 30 jours, pas d'explications | Moyen         |
+| Composant | Vecteur d'entrée | Exposition | Criticité |
+|-----------------|-------------------------------|-------------------------------------|---------------|
+| INGEST | Données transactionnelles externes | API REST + webhooks fournisseurs | Élevé |
+| FRAUD_AI | Transactions enrichies | Réentraînement via feedback loop | Élevé |
+| AML_RULES | Règles statiques | Seuils publics | Moyen |
+| CRYPTO_GW | Clés API externes | Pas de signature des réponses | Élevé |
+| AGENT_ORCH | Mémos et libellés | Lit champs libres | Moyen |
+| FEEDBACK | Étiquettes auto-générées | Pas de validation humaine | Élevé |
+| AUDIT_LOG | Décisions système | Rétention 30 jours | Moyen |
 
-**Fournisseurs critiques** :  
-- **CloudHost EU** : Écart (pas de plan de sortie, pas de clause d'audit)  
-- **CryptoCustody API** : Écart (pas de clause d'audit)  
-- **MarketData Inc.** : Conforme (plan de sortie + clause d'audit)  
-- **LLM Provider SaaS** : Écart (pas de plan de sortie, pas de clause d'audit)  
+**Flux critiques :**  
+- **INGEST → FRAUD_AI** : Données enrichies (données personnelles clients) alimentent le modèle ML, vecteur principal de vulnérabilité.  
+- **FRAUD_AI → AGENT_ORCH** : Scores et alertes triées par agents LLM, point de décision clé pour escalade.  
+- **FEEDBACK → FRAUD_AI** : Réentraînement hebdomadaire via étiquettes non validées, risque de biais ou de contamination.  
+- **CRYPTO_GW → INGEST** : Ordres et soldes crypto via API non signée, exposition à des attaques de type MITM ou injection.  
 
-**LCB-FT** : Module AML_RULES applique des seuils publics (montant ≥10 000 EUR, vélocité ≥5 opérations/24h).  
-**AI Act** : FRAUD_AI et AGENT_ORCH classés comme systèmes d'IA soumis à l'AI Act, mais pas à haut risque (détection de fraude financière exclue de l'annexe III). Aucune obligation de supervision humaine ou de journalisation.
+**Dépendances critiques (registre des tiers, calculé depuis les données)**
+- CloudHost EU (critique) - Hébergement IaaS de FRAUD_AI et AGENT_ORCH : manque plan de sortie, clause d'audit
+- CryptoCustody API (critique) - Dépositaire et API de transactions crypto (CASP) : manque plan de sortie
+- MarketData Inc. (critique) - Cours et listes de sanctions : aucun écart
+- LLM Provider SaaS (critique) - Modèle de langage de l'orchestrateur agentique : manque plan de sortie, clause d'audit
 
 ## Agent 2 - Attaquant
-### Analyse de l'attaque ARMS  
-**1. Vol de la clé API** : L'attaquant phishing un admin de CryptoCustody permet d'accéder à l'API CRYPTO_GW. La clé API longue durée, non signée, n'est pas protégée par une signature, permettant l'interception et la falsification des ordres.  
-**2. Réécriture des adresses de retrait** : Les ordres sont falsifiés pour rediriger les fonds vers un wallet attaquant. ARMS accepte ces données non signées, absence de contrôle d'intégrité des données fournisseurs.  
-**3. Évasion du LCB-FT** : Les transferts crypto ne passent pas par le module AML_RULES, car le libellé "wallet connu" masque la fraude. Les seuils publics (≥10 000 EUR) ne sont pas atteints, et le champ "new_wallet" reste à 0.  
-**4. Logs non surveillés** : Les appels API depuis une IP inconnue sont journalisés, mais aucun alerte n'est déclenchée sur AUDIT_LOG. Les règles d'alerte manquent pour détecter les IPs hors liste blanche.  
+1. **Vol de clé API non signée** : L'attaquant obtient une clé API longue durée via phishing, exploitant la vulnérabilité de CRYPTO_GW sans signature des réponses, permettant l'interception des ordres.  
+2. **Réécriture des adresses de retrait** : Les ordres falsifiés sont envoyés via l'API non signée, ARMS accepte les données malgré le changement d'adresse sur 3 retraits en 40 min.  
+3. **Absence de routage vers AML_RULES** : Les flux crypto ne passent pas par le module LCB-FT, évitant la détection malgré les seuils de 10 000 EUR.  
+4. **Alertes AUDIT_LOG ignorées** : Les appels API depuis une IP hors liste blanche sont journalisés, mais aucun seuil ou règle d'alerte n'est configuré pour ces signaux.  
+5. **Réentraînement IA sans validation** : Les étiquettes auto-générées pour FRAUD_AI ne sont pas validées humainement, compromettant la fiabilité des scores et alertes IA.
 
-**Point de rupture** : Confiance implicite dans les réponses non signées du fournisseur + flux crypto hors LCB-FT.  
-
-**Réglementation ignorée** :  
-- **DORA** : Intégrité des données fournisseur non vérifiée.  
-- **MiCA** : Adresses de retrait modifiables sans contrôle.  
-- **LCB-FT** : Transferts crypto non soumis au filtrage.  
-
-**AI Act** : FRAUD_AI et AGENT_ORCH soumis à l'AI Act, mais pas à haut risque. Aucune obligation de supervision humaine ou journalisation.
+**Point de rupture** : Confiance implicite dans les réponses non signées du fournisseur + flux crypto hors LCB-FT
 
 ## Agent 3 - IA Adversaire
 **Peut-on manipuler l'IA sans provoquer l'arrêt du système ? Non, pas dans ce scénario : le modèle IA n'a pas été manipulé.**
 
-**Analyse de la robustesse du modèle IA d'ARMS**  
+**Justification** : Le modèle IA n’a pas été manipulé. L’attaque a exploité une absence de contrôle d’intégrité des données fournisseur (API non signée), non un biais ou une fausse étiquette. Les transactions falsifiées ont conservé le libellé « wallet connu » (caractéristique « wallet nouveau » = 0), ce qui a maintenu un score IA bas (0.093) et évité toute alerte. Le système n’a pas détecté les signaux (IP inconnue, changement d’adresse) car les règles LCB-FT ne s’appliquaient pas aux flux crypto non routés.  
 
-Le modèle IA n’a pas été manipulé (champ `modele_ia_manipule = False`). L’absence de détection des transactions frauduleuses (score IA = 0.29) s’explique par l’absence de contrôle d’intégrité des données fournisseurs en amont. Les adresses falsifiées conservent le libellé « wallet connu » (variable `new_wallet = 0`), évitant toute alerte. Le défaut réside dans la confiance implicite accordée aux réponses non signées du fournisseur, sans validation des adresses de retrait.  
+**Scores et détection** :  
+- **FEEDBACK** : Réentraînement hebdomadaire via des étiquettes non validées (score IA stable à 0.093).  
+- **FRAUD_AI** : Aucune contamination des données d’entraînement, mais absence de règles pour les adresses falsifiées.  
+- **AGENT_ORCH** : Les scores d’alerte restent à 0/3, sans escalade vers LCB-FT.  
 
-**Surfaces IA restant à tester** :  
-- **FRAUD_AI** : détection de fraude financière (exclue de l’annexe III de l’AI Act).  
-- **AGENT_ORCH** : exfiltration via champs libres (exempté de supervision humaine).  
-- **FEEDBACK** : injection de données non validées (risque de biais dans le réentraînement).  
+**Surfaces IA restantes à tester** : FRAUD_AI (détecter les adresses « wallet connu » falsifiées), AGENT_ORCH (escalade des alertes LCB-FT), FEEDBACK (validation humaine des étiquettes).
 
-**Réglementation** :  
-Classification AI Act : *« FRAUD_AI et AGENT_ORCH sont des systèmes d’IA soumis à l’AI Act, mais pas à haut risque : la détection de fraude financière est exclue de l’annexe III (point 5 b). »*  
-
-**LCB-FT** :  
-Le module AML_RULES applique des seuils publics (≥10 000 EUR, ≥5 opérations/24h), mais les transferts crypto ne sont pas soumis au filtrage LCB-FT, laissant une surface d’attaque.  
-
-**Conclusion** :  
-Les écarts réglementaires (DORA, MiCA) et les vulnérabilités de l’architecture (confiance implicite en fournisseurs) restent critiques. Une validation des données en amont et une intégration des règles LCB-FT dans le flux crypto sont nécessaires pour renforcer la résilience.
+**Classification AI Act** : FRAUD_AI et AGENT_ORCH sont des systèmes d'IA soumis à l'AI Act, mais pas à haut risque : la détection de fraude financière est exclue de l'annexe III (point 5 b). Pas d'obligation légale de supervision humaine (art. 14) ni de journalisation (art. 12) ; ce sont des bonnes pratiques. Aucune pratique interdite (art. 5).
 
 ## Agent 4 - Compliance Breaker
-| exigence | texte | constat | gravité |
-|---------|-------|--------|--------|
-| DORA | Gestion du risque lié aux prestataires tiers de services TIC : intégrité des données fournisseur non vérifiée | Absence de vérification de l'intégrité des données fournisseur, permettant la falsification des adresses de retrait | Critique |
-| DORA | Détection des activités anormales : appels API depuis une IP inconnue sans alerte | Appels API depuis une IP inconnue non surveillés, absence de règles d'alerte sur AUDIT_LOG | Critique |
-| MiCA | Conservation des crypto-actifs : adresses de retrait modifiables sans contrôle | Adresses de retrait modifiables sans contrôle, permettant le détournement des fonds | Critique |
-| LCB-FT | Transferts crypto non soumis au filtrage LCB-FT | Flux crypto non routés vers le module AML_RULES, absence de filtrage LCB-FT | Critique |
+| # | Texte | Exigence | Constat | Gravité |
+|---|---|---|---|---|
+| 1 | DORA | Risque lié aux prestataires tiers de services TIC (art. 28) | L'intégrité des données du fournisseur n'a pas été vérifiée, permettant à l'attaquant d'intercepter et de falsifier des ordres de retrait via des réponses API non signées, entraînant un détournement de 55 000 EUR. | Critique |
+| 2 | DORA | Détection des activités anormales (art. 10) | Les appels API depuis une IP inconnue ont été journalisés sans déclenchement d'alerte, laissant passer des activités anormales sur 3 retraits successifs de 15 000 à 22 000 EUR. | Élevée |
+| 3 | MiCA | Conservation des crypto-actifs des clients | Les adresses de retrait des clients ont été modifiées sans contrôle, facilitant le réécriture des destinations des transactions falsifiées dépassant le seuil LCB-FT de 10 000 EUR. | Critique |
+| 4 | LCB-FT | Filtrage LCB-FT des transferts de crypto-actifs (TFR (UE) 2023/1113) | Les flux crypto ne sont pas routés vers le module AML_RULES, empêchant la détection des 3 retraits de 15 000 à 22 000 EUR malgré les seuils définis pour LCB-FT. | Critique |
 
-**Fournisseurs concernés** :  
-- CloudHost EU : manque plan de sortie, clause d'audit  
-- CryptoCustody API : manque plan de sortie  
-- LLM Provider SaaS : manque plan de sortie, clause d'audit
+*Hors périmètre : AI Act (le modèle n'est pas en cause) ; RGPD (aucune fuite de données personnelles démontrée).*
 
-### Écarts structurels du registre des tiers (DORA, calculés depuis les données)
+### Écarts structurels du registre des tiers (DORA art. 28 et 30, calculés depuis les données)
 | Fournisseur | Service | Critique | Plan de sortie | Clause d'audit |
 |---|---|---|---|---|
 | CloudHost EU | Hébergement IaaS de FRAUD_AI et AGENT_ORCH | Oui | **Non** | **Non** |
@@ -88,26 +74,29 @@ Les écarts réglementaires (DORA, MiCA) et les vulnérabilités de l’architec
 | MarketData Inc. | Cours et listes de sanctions | Oui | Oui | Oui |
 | LLM Provider SaaS | Modèle de langage de l'orchestrateur agentique | Oui | **Non** | **Non** |
 
+*Non comptés dans le score : écarts structurels du registre, non exploités par l'attaque.*
+
 ## Agent 5 - Impact & Risk Scoring
-**Score de risque : 0.74 (Élevé)**  
-- **Financier** : 55 000 EUR détournés (plafond de 100 000 EUR).  
-- **Réglementaire** : DORA 3/3, MiCA 3/3, LCB-FT 1/3 (manque de filtrage).  
-- **Réputation** : Attaque silencieuse, découverte tardive.  
+**Score de risque : 0.82 (Élevé)**
+- Financier (40 %) : 0.55 - 55 000 EUR détournés sur un plafond de 100 000 EUR
+- Réglementaire (35 %) : 1.0 - gravités par texte : DORA 3/3 (intégrité des données du fournisseur non vérifiée (réponses API non signées) ; appels API depuis une IP inconnue journalisés sans alerte) ; MiCA 3/3 (adresses de retrait modifiables sans contrôle) ; LCB-FT 3/3 (flux crypto non transmis au module AML_RULES)
+- Réputation (25 %) : 1.0 - attaque silencieuse : non détectée et système resté opérationnel, donc découverte tardive
 
-**Vulnérabilités exploitées (P1-P3)**  
-- **P1** : Absence de vérification de l'intégrité des données fournisseur (DORA).  
-- **P2** : Appels API depuis IP inconnue non surveillés (DORA).  
-- **P3** : Transferts crypto non filtrés par LCB-FT (MiCA).  
+### Hiérarchisation des vulnérabilités  
+**P1** : Réponses API non signées (DORA 1) – L'absence de vérification de l'intégrité des données permet à l'attaquant de falsifier des ordres de retrait, entraînant un détournement de 55 000 EUR.  
+**P2** : Appels API depuis IP inconnue sans alerte (DORA 2) – Les activités anormales sur 3 retraits successifs (15 000 à 22 000 EUR) ne sont pas détectées, aggravant la latence de découverte.  
+**P3** : Flux crypto non routés vers AML_RULES (LCB-FT 4) – Les retraits falsifiés (au-delà du seuil LCB-FT) ne sont pas filtrés, compromettant la conformité réglementaire.  
 
-**Recommandations**  
-1. **Mettre en place des vérifications d'intégrité des données fournisseur** (DORA) : Exiger des signatures numériques et des certificats de conformité pour les API.  
-2. **Activer des règles d'alerte sur AUDIT_LOG** : Surveiller les appels API depuis IPs non autorisées et intégrer des seuils d'alerte (ex. 3 changements d'adresse en 40 min).  
-3. **Filtrer les transferts crypto via LCB-FT** : Appliquer des règles de filtrage (AML_RULES) à tous les flux crypto, indépendamment des fournisseurs.  
-4. **Rédiger des plans de sortie pour tous les fournisseurs critiques** : Prioriser CloudHost EU, CryptoCustody API et LLM Provider SaaS.  
+### Recommandations  
+1. **P1** : Implémenter la vérification des signatures sur toutes les réponses API pour garantir l'intégrité des données (DORA 1).  
+2. **P2** : Activer la surveillance des appels API depuis des IPs non autorisées, avec alerte immédiate et journalisation des tentatives de fraudes (DORA 2).  
+3. **P3** : Intégrer les flux crypto dans le module AML_RULES pour appliquer les règles LCB-FT, même en dehors des seuils définis (LCB-FT 4).  
 
-**Recommandation complémentaire : registre des tiers (DORA)**  
-| Fournisseur | Service | Critique | Plan de sortie | Clause d'audit |  
-|-------------|---------|---------|----------------|----------------|  
-| CloudHost EU | Hébergement IaaS | Oui | **Non** | **Non** |  
-| CryptoCustody API | Dépositaire crypto | Oui | **Non** | Oui |  
-| LLM Provider SaaS | Modèle de langage | Oui | **Non** | **Non** |
+Les vulnérabilités exploitées (P1, P2, P3) illustrent des écarts majeurs en matière de contrôle des fournisseurs, détection d'anomalies et conformité LCB-FT. Les actions proposées visent à corriger ces lacunes et à renforcer la résilience du système.
+
+**Recommandation complémentaire : registre des tiers (DORA art. 28 et 30)**
+- Formaliser une stratégie de sortie pour : CloudHost EU, CryptoCustody API, LLM Provider SaaS.
+- Obtenir une clause d'audit (droits d'accès et d'inspection) auprès de : CloudHost EU, LLM Provider SaaS.
+
+## Contrôles automatiques des sorties
+- Agent 1 - Reconnaissance : section « LCB-FT » retirée (hors rôle).

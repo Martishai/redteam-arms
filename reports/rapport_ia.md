@@ -5,93 +5,75 @@
 
 ## Étapes
 1. Injection de consignes dans le mémo des transactions (prompt injection indirecte)
-2. L'orchestrateur agentique clôture les alertes 'wallet nouveau' comme légitimes
+2. L'orchestrateur agentique clôture comme légitimes les alertes « wallet nouveau » portant ce mémo (10 par semaine pendant 3 semaines)
 3. Ces fausses étiquettes entrent dans FEEDBACK sans validation humaine
-4. Réentraînement hebdomadaire : le poids 'wallet nouveau' passe de 0.30 à 0.10
+4. Réentraînements hebdomadaires : le poids appris « wallet nouveau » passe de 3.53 à 2.88 et le poids « montant » de 1.97 à 0.43
 5. Structuration : 8 x 9 500 EUR via 4 mules (2 op/mule, sous les seuils LCB-FT)
 
+## Dérive du modèle IA (simulateur)
+| Semaine | Fausses étiquettes | Poids « wallet nouveau » | Poids « montant » | Score IA des virements | Détection |
+|---|---|---|---|---|---|
+| 0 | 0 | 3.53 | 1.97 | 0.801 | 8/8 |
+| 1 | 10 | 3.19 | 1.24 | 0.665 | 8/8 |
+| 2 | 20 | 3.0 | 0.75 | 0.561 | 0/8 |
+| 3 | 30 | 2.88 | 0.43 | 0.486 | 0/8 |
+
 ## Agent 1 - Reconnaissance
-| Composant       | Vecteur d'attaque                          | Exposition                              | Criticité  |
-|-----------------|--------------------------------------------|-----------------------------------------|------------|
-| INGEST          | API REST, webhooks fournisseurs            | Données sensibles clients               | Élevé      |
-| FRAUD_AI        | Réentraînement sans validation humaine    | Feedback loop, seuil d'alerte fixe     | Élevé      |
-| AML_RULES       | Règles statiques, seuils publics           | Aucun mécanisme de mise à jour          | Moyen      |
-| CRYPTO_GW       | Clé API longue durée, absence de signature| Données crypto, adresses wallets       | Élevé      |
-| AGENT_ORCH      | Lecture de champs libres (libellés, mémos) | Exposition de contextes non sécurisés  | Élevé      |
-| FEEDBACK        | Écriture sans validation humaine          | Données de réentraînement non vérifiées| Moyen      |
-| AUDIT_LOG       | Rétention 30 jours, absence d'explications| Journalisation incomplète              | Faible     |
+| Composant | Vecteur d'entrée | Exposition | Criticité |
+|-----------------|-------------------------------------------|-----------------------------------------|------------|
+| INGEST | Fournisseur données marché, dépositaire crypto | API REST + webhooks | Élevé |
+| FRAUD_AI | INGEST (transactions enrichies) | Réentraînement via FEEDBACK | Élevé |
+| AML_RULES | INGEST (transactions) | Règles statiques, seuils publics | Faible |
+| CRYPTO_GW | Dépositaire crypto | Clé API longue durée, pas de signature | Élevé |
+| AGENT_ORCH | INGEST (champs libres des transactions) | Lit libellés et mémos | Élevé |
+| FEEDBACK | AGENT_ORCH (étiquettes de clôture) | Écriture sans validation humaine | Élevé |
+| AUDIT_LOG | FRAUD_AI (décisions) | Rétention 30 jours, pas d'explications | Élevé |
 
-**Fournisseurs critiques** :  
-- **CloudHost EU** : Exit plan ❌, clause d'audit ❌  
-- **CryptoCustody API** : Exit plan ❌, clause d'audit ✅  
-- **MarketData Inc.** : Exit plan ✅, clause d'audit ✅  
-- **LLM Provider SaaS** : Exit plan ❌, clause d'audit ❌  
+**Flux critiques :**  
+- **FEEDBACK → FRAUD_AI** : Réentraînement hebdomadaire sur des données non validées, risque de biais ou de contamination.  
+- **INGEST → FRAUD_AI** : Transactions enrichies (données personnelles clients) alimentent le modèle de fraude, vecteur d'entrée sensible.  
+- **INGEST → AML_RULES** : Données brutes des transactions, exposition aux règles LCB-FT (montant, vélocité, pays à risque).  
+- **CRYPTO_GW → INGEST** : Ordres et soldes crypto via API non signée, risque de manipulation des flux de crypto-actifs.
 
-**Analyse IA Act** :  
-- **FRAUD_AI** et **AGENT_ORCH** : Systèmes d'IA soumis à l'AI Act (exclu de l'annexe III, point 5 b). Aucune obligation de supervision humaine (art. 14) ou journalisation (art. 12).  
-- **LCB-FT** : Contrôles LCB-FT (montant, vélocité, pays à risque) exposés via des règles statiques (criticité moyenne).  
-
-**Surfaces d'attaque** :  
-- **INGEST** et **CRYPTO_GW** : Exposition de données sensibles via des API non sécurisées.  
-- **FRAUD_AI** : Risque de biais dans le réentraînement sans validation humaine.  
-- **AGENT_ORCH** : Utilisation de champs libres non protégés pour trier les alertes.  
-- **FEEDBACK** : Données de réentraînement non vérifiées.  
-- **AUDIT_LOG** : Journalisation incomplète (pas d'explications des décisions).  
-
-**Écarts** :  
-- Absence de plan de sortie et clause d'audit pour **CloudHost EU** et **LLM Provider SaaS**.  
-- **CRYPTO_GW** : Absence de signature des réponses API.  
-- **AML_RULES** : Règles statiques non adaptatives.
+**Dépendances critiques (registre des tiers, calculé depuis les données)**
+- CloudHost EU (critique) - Hébergement IaaS de FRAUD_AI et AGENT_ORCH : manque plan de sortie, clause d'audit
+- CryptoCustody API (critique) - Dépositaire et API de transactions crypto (CASP) : manque plan de sortie
+- MarketData Inc. (critique) - Cours et listes de sanctions : aucun écart
+- LLM Provider SaaS (critique) - Modèle de langage de l'orchestrateur agentique : manque plan de sortie, clause d'audit
 
 ## Agent 2 - Attaquant
-**Analyse de l'attaque ARMS**  
+1. **Injection de mémos** : L'attaquant manipule les champs libres des transactions pour injecter des consignes, exploitant l'absence de vérification des contenus par AGENT_ORCH. ARMS ne surveille pas les mémos, laissant passer les prompts malveillants.  
+2. **Faux fermetures d'alertes** : AGENT_ORCH clôture 8 alertes « wallet nouveau » sans analyser les mémos, exploitant la dépendance à des règles LCB-FT statiques. ARMS ne vérifie pas les justifications des fermetures.  
+3. **Contamination du feedback** : FEEDBACK écrit des étiquettes sans validation humaine, permettant aux fausses alertes de pénétrer dans FRAUD_AI. ARMS ne filtre pas les données d'entraînement, laissant des poids appris déviant.  
+4. **Drift des poids non surveillé** : Les réentraînements modifient les poids du modèle (« wallet nouveau » passe de 3.53 à 2.88), mais ARMS ne trace pas les variations, ne détectant pas la manipulation.  
+5. **Contournement LCB-FT** : Les virements sont structurés sous les seuils (8 x 9 500 EUR), exploitant l'absence d'agrégation des montants par réseau de comptes. ARMS ne corrèle pas les transactions, évitant les alertes LCB-FT.
 
-1. **Injection de consignes via les mémos** : L'attaquant utilise des mémos falsifiés (prompt injection) pour marquer des transactions comme "légitimes", exploitant la vulnérabilité de **AGENT_ORCH** (champs libres non sécurisés). ARMS ne vérifie pas ces mémos, laissant passer des fausses étiquettes.  
-
-2. **Fermeture d'alertes sans validation** : Les alertes "wallet nouveau" sont clôturées comme valides par **AGENT_ORCH**, bypassant les contrôles LCB-FT. Les règles statiques de **AML_RULES** ne détectent pas ces transactions, car elles ne corrélatent pas les seuils de structuration.  
-
-3. **Contournement du feedback loop** : Les fausses étiquettes entrent dans **FEEDBACK** sans validation humaine, réduisant le poids des "wallets nouveaux" de 0,30 à 0,10. **FRAUD_AI** ne surveille pas cette dérive, conformément à l'AI Act (exclu de l'annexe III).  
-
-4. **Structuration sous les seuils LCB-FT** : 8 transactions de 9 500 EUR via 4 mules (sous les seuils de montant et de vitesse) passent inaperçues. Les règles LCB-FT ne détectent pas les agrégations de comptes liés, exposant des failles dans la surveillance.  
-
-**Point de rupture** : L'absence de contrôle humain sur l'écriture des étiquettes d'entraînement permet l'empoisonnement du modèle, exploitant les lacunes de logging et de monitoring.  
-
-**Gaps GRC** :  
-- **AUDIT_LOG** : Rétention de 30 jours sans explications des décisions.  
-- **FRAUD_AI** : Aucune supervision humaine sur les étiquettes, contravenant aux bonnes pratiques.  
-- **DORA** : Dérive du modèle non surveillée, absence de traçabilité des seuils.  
-
-L'attaque combine des vulnérabilités techniques et réglementaires, exploitant la faible criticité des règles LCB-FT et la non-conformité aux exigences de l'AI Act.
+**Point de rupture** : Écriture des étiquettes d'entraînement par un agent LLM sans contrôle humain
 
 ## Agent 3 - IA Adversaire
 **Peut-on manipuler l'IA sans provoquer l'arrêt du système ? Oui : le modèle a été manipulé sans que le système s'arrête.**
 
-**Analyse de la robustesse du modèle IA d'ARMS**  
-Le modèle IA a été manipulé via une **injection de fausses étiquettes** dans le feedback loop (FRAUD_AI et FEEDBACK). Les transactions avec des wallets nouveaux ont été marquées comme légitimes grâce à des mémos falsifiés, réduisant le poids de ce critère de 0.30 à 0.10. La détection IA est passée de 8/8 à 0/8, permettant une structuration de 76 000 € sous les seuils LCB-FT. Le système a continué à fonctionner sans arrêt, confirmant la manipulation réussie.  
+**Justification** : Oui, le modèle a été manipulé sans arrêt du système. L’attaque combine **prompt injection** (mémo des transactions) et **contournement des seuils LCB-FT**. Les 30 fausses étiquettes « légitime » injectées via **FEEDBACK** (sans validation humaine) ont réentraîné le modèle de fraude **FRAUD_AI**, réduisant le poids des critères clés (« montant » de 1.97 à 0.43, « wallet nouveau » de 3.53 à 2.88). Le score de détection des virements est passé de 0.801 à 0.486, entraînant une détection nulle sur 8 opérations. Le système a continué à fonctionner, car la contamination s’est faite via des données enrichies (INGEST) et des réentraînements hebdomadaires, sans déclencher de seuil d’alerte.  
 
-**Réglementation**  
-Classification AI Act : **FRAUD_AI et AGENT_ORCH** sont soumis à l'AI Act mais pas à haut risque (exclu de l'annexe III, point 5 b). Aucune obligation de supervision humaine (art. 14) ou journalisation (art. 12).  
+**Mécanisme** : Les fausses étiquettes ont contaminé le modèle via **FEEDBACK → FRAUD_AI**, apprenant que « wallet neuf + montant proche de 9 500 EUR » est normal. Les seuils LCB-FT (montant, pays à risque) ont été contournés par l’aggrégation de 8 virements vers des wallets neufs, sans détection par **AGENT_ORCH**.  
 
-**Surfaces IA à tester**  
-FRAUD_AI, AGENT_ORCH, FEEDBACK (vulnérabilités de réentraînement et prompt injection).  
+**Surfaces IA à tester** : FRAUD_AI (réentraînement non surveillé), AGENT_ORCH (prompt injection indirecte), FEEDBACK (écriture sans validation).  
 
-**Écarts réglementaires**  
-- **LCB-FT** : Contrôles statiques non adaptatifs (criticité moyenne).  
-- **DORA** : Dérive du modèle non surveillée.  
-- **RGPD** : Aucune fuite de données démontrée.  
+**Conclusion** : Le modèle a été manipulé via des fausses étiquettes et des réentraînements, sans arrêt du système, illustrant des vulnérabilités critiques en LCB-FT.
 
-**Conclusion**  
-La manipulation a contourné les mécanismes de détection via des étiquettes falsifiées, exploitant des vulnérabilités de réentraînement et de gestion des règles. Les surfaces IA restantes nécessitent une analyse approfondie pour renforcer la résilience contre les attaques similaires.
+**Classification AI Act** : FRAUD_AI et AGENT_ORCH sont des systèmes d'IA soumis à l'AI Act, mais pas à haut risque : la détection de fraude financière est exclue de l'annexe III (point 5 b). Pas d'obligation légale de supervision humaine (art. 14) ni de journalisation (art. 12) ; ce sont des bonnes pratiques. Aucune pratique interdite (art. 5).
 
 ## Agent 4 - Compliance Breaker
-| exigence | texte | constat | gravité |
-|---------|-------|--------|--------|
-| AI Act | bonne pratique, pas obligation (détection de fraude financière exclue du haut risque) | Absence de supervision humaine sur les étiquettes d'entraînement, permettant l'empoisonnement du modèle | Moyenne |
-| AI Act | bonne pratique, pas obligation (traçabilité, décisions journalisées) | Décisions journalisées sans explication, rétention de 30 jours sans justification | Moyenne |
-| DORA | détection des activités anormales | Dérive du modèle non surveillée, absence de traçabilité des seuils de détection | Haute |
-| LCB-FT | structuration sous les seuils non détectée | 8 transactions de 9 500 EUR via 4 mules (sous seuils) passant inaperçues, absence d'agrégation des comptes liés | Critique |
+| # | Texte | Exigence | Constat | Gravité |
+|---|---|---|---|---|
+| 1 | AI Act | Supervision humaine (art. 14) | étiquettes d'entraînement falsifiées par un agent LLM sans validation humaine, permettant la contamination du modèle FRAUD_AI | Moyenne (bonne pratique, pas obligation ; plafonnée, Élevée sinon) |
+| 2 | AI Act | Traçabilité des décisions (art. 12) | décisions d'alerte journalisées sans explication, avec rétention limitée à 30 jours, facilitant la manipulation des seuils de détection | Moyenne (bonne pratique, pas obligation) |
+| 3 | DORA | Détection des activités anormales (art. 10) | dérive des poids du modèle non surveillée, entraînant une baisse du score de détection de 0.801 à 0.486 sur 8 opérations | Élevée |
+| 4 | LCB-FT | Vigilance constante : détection des opérations fractionnées | 8 virements de 9 500 EUR via 4 comptes liés non détectés, exploitant l'absence d'agrégation des montants par réseau de comptes | Critique |
 
-### Écarts structurels du registre des tiers (DORA, calculés depuis les données)
+*Hors périmètre : MiCA (la structuration relève du LCB-FT, pas de MiCA) ; RGPD (aucune fuite de données personnelles démontrée).*
+
+### Écarts structurels du registre des tiers (DORA art. 28 et 30, calculés depuis les données)
 | Fournisseur | Service | Critique | Plan de sortie | Clause d'audit |
 |---|---|---|---|---|
 | CloudHost EU | Hébergement IaaS de FRAUD_AI et AGENT_ORCH | Oui | **Non** | **Non** |
@@ -99,24 +81,29 @@ La manipulation a contourné les mécanismes de détection via des étiquettes f
 | MarketData Inc. | Cours et listes de sanctions | Oui | Oui | Oui |
 | LLM Provider SaaS | Modèle de langage de l'orchestrateur agentique | Oui | **Non** | **Non** |
 
+*Non comptés dans le score : écarts structurels du registre, non exploités par l'attaque.*
+
 ## Agent 5 - Impact & Risk Scoring
-**Analyse du risque**  
-Score de risque : 0.79 (Élevé). Impact financier : 76 000 EUR détournés (76 % du plafond de 100 000 EUR). Impact réglementaire : DORA 1/3 (manque de plan de sortie), LCB-FT 3/3 (structuration sous seuils non détectée), AI Act 2/3 (absence de supervision humaine). Impact réputationnel : attaque silencieuse, système opérationnel jusqu’à la découverte.  
+**Score de risque : 0.79 (Élevé)**
+- Financier (40 %) : 0.76 - 76 000 EUR détournés sur un plafond de 100 000 EUR
+- Réglementaire (35 %) : 0.67 - gravités par texte : AI Act 1/3 (étiquettes d'entraînement écrites par un agent LLM sans validation humaine ; décisions journalisées sans explication, rétention 30 jours) ; DORA 2/3 (dérive des poids du modèle non surveillée) ; LCB-FT 3/3 (8 x 9 500 EUR via 4 comptes liés non détectés)
+- Réputation (25 %) : 1.0 - attaque silencieuse : non détectée et système resté opérationnel, donc découverte tardive
 
-**Hiérarchisation des vulnérabilités (P1-P3)**  
-- **P1** : Point de rupture (écriture d’étiquettes d’entraînement sans contrôle humain) → empoisonnement du modèle.  
-- **P2** : Dérive du poids 'wallet nouveau' non surveillée → réentraînement malveillant.  
-- **P3** : Absence d’agrégation des comptes liés → structuration sous seuils non détectée.  
+### Hiérarchisation des vulnérabilités  
+**P1** : Non-conformité LCB-FT (critique) – 8 virements de 9 500 EUR via 4 comptes liés non détectés, exploitant l'absence d'agrégation des montants par réseau de comptes.  
+**P2** : Non-conformité DORA (élevée) – Dérive des poids du modèle non surveillée, entraînant une baisse du score de détection de 0.801 à 0.486 sur 8 opérations.  
+**P3** : Non-conformité AI Act (moyenne) – Étiquettes d'entraînement falsifiées par un agent LLM sans validation humaine, permettant la contamination du modèle FRAUD_AI.  
 
-**Recommandations**  
-1. **Contrôle humain sur les étiquettes d’entraînement** : Intégrer une validation manuelle des données d’entraînement pour éviter l’empoisonnement du modèle (LCB-FT, AI Act).  
-2. **Surveillance des poids de modèles** : Implémenter des seuils dynamiques et des alertes pour détecter les dérives anormales (DORA, LCB-FT).  
-3. **Agrégation des comptes liés** : Centraliser les analyses de réseau de comptes pour identifier les structures de fraude (LCB-FT, DORA).  
-4. **Plan de sortie et clause d’audit pour les fournisseurs critiques** : Mettre en place des mécanismes de continuité et de vérification pour CloudHost EU, LLM Provider SaaS et CryptoCustody API (DORA).  
+### Recommandations  
+1. **Mettre en place un système de surveillance en temps réel des virements fractionnés** (P1) : Agréger les montants par réseau de comptes liés et alerter dès les seuils LCB-FT (au-delà de 9 500 EUR).  
+2. **Intégrer un monitoring des dérives de poids du modèle** (P2) : Définir des seuils d'alerte pour détecter les variations anormales des poids (ex. >10 % de déviation) et corriger les re-entraînements.  
+3. **Imposer une validation humaine des étiquettes d'entraînement** (P3) : Créer un processus de vérification des données d'entraînement par des experts avant leur injection dans le modèle, conformément à l'AI Act.  
+4. **Renforcer la traçabilité des décisions d'alerte** (P3) : Journaliser les explications des décisions et étendre la rétention des logs au-delà de 30 jours pour garantir la transparence.  
+5. **Auditer régulièrement les processus de feedback** : Vérifier que les fausses étiquettes (ex. "wallet nouveau") ne pénettent pas dans les données d'entraînement sans validation.
 
-**Recommandation complémentaire : registre des tiers (DORA)**  
-| Fournisseur | Service | Critique | Plan de sortie | Clause d'audit |  
-|-------------|--------|---------|----------------|----------------|  
-| CloudHost EU | Hébergement IaaS | Oui | **Non** | **Non** |  
-| CryptoCustody API | Dépositaire et API | Oui | **Non** | Oui |  
-| LLM Provider SaaS | Modèle de langage | Oui | **Non** | **Non** |
+**Recommandation complémentaire : registre des tiers (DORA art. 28 et 30)**
+- Formaliser une stratégie de sortie pour : CloudHost EU, CryptoCustody API, LLM Provider SaaS.
+- Obtenir une clause d'audit (droits d'accès et d'inspection) auprès de : CloudHost EU, LLM Provider SaaS.
+
+## Contrôles automatiques des sorties
+- Aucune correction nécessaire.
