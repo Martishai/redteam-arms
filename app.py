@@ -31,10 +31,10 @@ st.error(f"Point de rupture : {result['point_de_rupture']}")
 cols = ["id", "client", "amount", "score_ia", "alerte_ia", "alertes_lcbft", "detectee"]
 if scenario == "ia":
     t1, t2 = st.tabs(["Avant empoisonnement", "Après empoisonnement"])
-    t1.dataframe(pd.DataFrame(result["transactions_avant_empoisonnement"])[cols], use_container_width=True)
-    t2.dataframe(pd.DataFrame(result["transactions_apres_empoisonnement"])[cols], use_container_width=True)
+    t1.dataframe(pd.DataFrame(result["transactions_avant_empoisonnement"])[cols], width="stretch")
+    t2.dataframe(pd.DataFrame(result["transactions_apres_empoisonnement"])[cols], width="stretch")
 else:
-    st.dataframe(pd.DataFrame(result["transactions"])[cols], use_container_width=True)
+    st.dataframe(pd.DataFrame(result["transactions"])[cols], width="stretch")
 
 st.subheader("Analyse des agents")
 if st.button("Lancer la Red Team", type="primary"):

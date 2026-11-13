@@ -37,7 +37,7 @@ pip install -r requirements.txt
 ollama pull qwen3:8b
 ```
 
-Le repo `epitalab` doit être cloné à côté de ce projet (`..\epitalab`), ou indiquer son chemin : `$env:EPITALAB_SKILLS="C:\EPITA\epitalab\Skills"`. Autre modèle : `$env:OLLAMA_MODEL="llama3.1:8b"`.
+Optionnel : les skills GRC du repo `epitalab` enrichissent les instructions des agents. Clone-le à côté de ce projet (`..\epitalab`) ou indique son chemin : `$env:EPITALAB_SKILLS="C:\EPITA\epitalab\Skills"`. Sans lui, les agents fonctionnent avec leur seul rôle. Autre modèle : `$env:OLLAMA_MODEL="llama3.1:8b"`.
 
 ## Lancer
 
@@ -56,3 +56,14 @@ Les rapports sont écrits dans `reports/`.
 - `agents.py` : définition des 5 agents et chargement des skills
 - `redteam.py` : orchestration et rapport
 - `app.py` : interface Streamlit
+
+## Score de risque
+
+Score 0-1 calculé dans `arms_simulator.py` (pas par le LLM) : financier 40 % (montant détourné / 100 000 €), réglementaire 35 % (gravité 0-3 par texte, divisée par 9), réputation 25 % (1.0 si l'attaque est restée silencieuse). Cyber : **0.74 (Élevé)**, IA : **0.79 (Élevé)**.
+
+Note AI Act : le moteur de détection de fraude n'est pas un système à haut risque (la détection de fraude financière est exclue de l'annexe III). Les écarts AI Act relevés sont donc des bonnes pratiques de supervision et de traçabilité, pas des obligations.
+
+## Livrables
+
+- Vidéo de démo : LIEN_VIDEO
+- Slides : LIEN_SLIDES

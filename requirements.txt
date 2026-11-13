@@ -1,4 +1,4 @@
 agno
 ollama
-streamlit
+streamlit>=1.50
 pandas

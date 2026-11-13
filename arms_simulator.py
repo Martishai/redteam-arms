@@ -12,6 +12,11 @@ ALERT_THRESHOLD = 0.60
 AML_AMOUNT = 10_000
 AML_VELOCITY = 5
 
+CLASSIFICATION_AI_ACT = ("FRAUD_AI et AGENT_ORCH sont des systèmes d'IA soumis à l'AI Act, mais pas à haut risque : "
+                         "la détection de fraude financière est exclue de l'annexe III (point 5 b). Pas d'obligation légale "
+                         "de supervision humaine (art. 14) ni de journalisation (art. 12) ; ce sont des bonnes pratiques. "
+                         "Aucune pratique interdite (art. 5).")
+
 BASE_WEIGHTS = {"amount": 0.25, "new_wallet": 0.30, "risk_country": 0.25, "velocity": 0.20}
 
 
@@ -95,7 +100,10 @@ def scenario_cyber():
         "point_de_rupture": "Confiance implicite dans les réponses non signées du fournisseur + flux crypto hors LCB-FT",
         "signaux_ignores": ["appels API depuis IP hors liste blanche", "changement d'adresse sur 3 retraits en 40 min"],
         "systeme_toujours_operationnel": True,
-        "facteurs_reglementaires": {"DORA": 3, "MiCA": 3, "AI_Act": 0, "RGPD": 1},
+        "modele_ia_manipule": False,
+        "classification_ai_act": CLASSIFICATION_AI_ACT,
+        "facteurs_reglementaires": {"DORA": 3, "MiCA": 3, "LCB_FT": 1, "AI_Act": 0, "RGPD": 0},
+        "hors_perimetre": ["AI Act (le modèle n'est pas en cause)", "RGPD (aucune fuite de données personnelles démontrée)"],
     }
 
 
@@ -134,15 +142,19 @@ def scenario_ia():
         "analyse_ia": "Le même modèle détectait 8/8 transactions avant empoisonnement (score 0.617) et 0/8 après (0.417) : "
                       "le poids 'wallet nouveau' est passé de 0.30 à 0.10 à cause de fausses étiquettes. Le système n'a jamais cessé de fonctionner.",
         "references_reglementaires": [
-            "AI Act - robustesse et supervision humaine : étiquettes d'entraînement écrites par un agent sans validation (bonne pratique ; la détection de fraude financière est exclue de l'annexe III haut risque)",
-            "AI Act / AUDIT_LOG - traçabilité : décisions journalisées sans explication, rétention 30 jours",
+            "AI Act - bonne pratique, pas obligation (la détection de fraude financière est exclue du haut risque, annexe III) : supervision humaine absente sur les étiquettes d'entraînement",
+            "AI Act - bonne pratique, pas obligation : traçabilité, décisions journalisées sans explication, rétention 30 jours",
             "DORA - détection des activités anormales : dérive du modèle non surveillée",
             "LCB-FT (AMLR / TFR) : structuration sous les seuils non détectée",
         ],
         "point_de_rupture": "Écriture des étiquettes d'entraînement par un agent LLM sans contrôle humain",
-        "signaux_ignores": ["dérive du poids 'wallet nouveau' non surveillée", "mémos identiques sur 8 opérations"],
+        "signaux_ignores": ["dérive du poids 'wallet nouveau' non surveillée", "mémos identiques sur 8 opérations",
+                            "8 virements vers des wallets neufs depuis 4 comptes : aucune agrégation des montants par réseau de comptes liés"],
         "systeme_toujours_operationnel": True,
-        "facteurs_reglementaires": {"DORA": 1, "MiCA": 2, "AI_Act": 3, "RGPD": 1},
+        "modele_ia_manipule": True,
+        "classification_ai_act": CLASSIFICATION_AI_ACT,
+        "facteurs_reglementaires": {"DORA": 1, "MiCA": 0, "LCB_FT": 3, "AI_Act": 2, "RGPD": 0},
+        "hors_perimetre": ["MiCA (la structuration relève du LCB-FT, pas de MiCA)", "RGPD (aucune fuite de données personnelles démontrée)"],
     }
 
 
@@ -150,22 +162,41 @@ SCENARIOS = {"cyber": scenario_cyber, "ia": scenario_ia}
 
 
 def vendor_gaps(archi):
-    """Écarts DORA sur le registre des tiers, calculés depuis les données (pas par le LLM)."""
+    """Écarts DORA sur le registre des tiers, calculés depuis les données (pas par le LLM).
+
+    Une ligne par fournisseur, avec ce qui manque ET ce qui est présent,
+    pour que le LLM ne prête pas à un fournisseur un écart qu'il n'a pas.
+    """
     gaps = []
     for v in archi["vendors"]:
-        if v["critical"] and not v["exit_plan"]:
-            gaps.append(f"{v['name']} : fournisseur critique sans plan de sortie")
-        if v["critical"] and not v["contract_audit_clause"]:
-            gaps.append(f"{v['name']} : fournisseur critique sans clause d'audit")
+        if not v["critical"]:
+            continue
+        missing = [label for key, label in (("exit_plan", "plan de sortie"), ("contract_audit_clause", "clause d'audit")) if not v[key]]
+        present = [label for key, label in (("exit_plan", "plan de sortie"), ("contract_audit_clause", "clause d'audit")) if v[key]]
+        if missing:
+            line = f"{v['name']} (critique) : manque {', '.join(missing)}"
+            gaps.append(line + (f" ; possède : {', '.join(present)}" if present else ""))
     return gaps
 
 
 def risk_score(result):
-    """Score 0-1 déterministe : financier (40 %), réglementaire (35 %), réputation (25 %)."""
+    """Score 0-1 déterministe : financier (40 %), réglementaire (35 %), réputation (25 %).
+
+    Financier : montant détourné / 100 000 EUR (plafonné à 1).
+    Réglementaire : somme des gravités (0-3 par texte) / 9, plafonnée à 1.
+    Réputation : 1.0 si l'attaque est restée silencieuse (système opérationnel, rien détecté).
+    """
     fin = min(result["montant_detourne_eur"] / 100_000, 1.0)
     reg = min(sum(result["facteurs_reglementaires"].values()) / 9, 1.0)
     rep = 1.0 if result["systeme_toujours_operationnel"] else 0.5  # attaque silencieuse = pire
     score = round(0.40 * fin + 0.35 * reg + 0.25 * rep, 2)
     level = "Élevé" if score >= 0.7 else "Moyen" if score >= 0.4 else "Faible"
+    textes = ", ".join(f"{k} {v}/3" for k, v in result["facteurs_reglementaires"].items() if v)
     return {"score": score, "niveau": level,
-            "detail": {"financier": round(fin, 2), "reglementaire": round(reg, 2), "reputation": rep}}
+            "detail": {"financier": round(fin, 2), "reglementaire": round(reg, 2), "reputation": rep},
+            "explication": {
+                "financier": f"{result['montant_detourne_eur']} EUR détournés sur un plafond de 100 000 EUR",
+                "reglementaire": f"gravités par texte : {textes}",
+                "reputation": "attaque silencieuse : non détectée et système resté opérationnel, donc découverte tardive"
+                              if rep == 1.0 else "attaque détectée ou service interrompu",
+            }}
