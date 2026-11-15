@@ -127,4 +127,4 @@ Les rapports sont écrits dans `reports/`. Si Ollama est arrêté, si le modèle
 
 ## Livrables
 
-- Vidéo de démo : https://youtu.be/lo6Wft4m0Ko
+- Vidéo de démo : https://youtu.be/k3-IV4MZAek
