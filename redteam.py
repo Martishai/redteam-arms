@@ -1,4 +1,5 @@
-"""Orchestration de la Red Team : Reconnaissance -> Attaquant + IA Adversaire -> Compliance -> Impact.
+"""Orchestration de la Red Team : Reconnaissance -> Attaquant + IA Adversaire -> Compliance -> Impact,
+puis boucle de remédiation : l'Agent 5 choisit un correctif, le simulateur l'applique, l'Agent 2 rejoue l'attaque.
 
 Partage des rôles :
 - arms_simulator.py fournit tous les faits (détection, montants, gravités, score) ;
@@ -11,6 +12,7 @@ Les corrections appliquées sont listées à la fin du rapport (« Contrôles au
 Usage :
     python redteam.py --scenario cyber
     python redteam.py --scenario ia
+    python redteam.py --scenario continuite
     python redteam.py --scenario cyber --dry-run   # sans LLM : teste la chaîne, rapport dans reports/dry-run/
 """
 import argparse
@@ -36,8 +38,11 @@ LABELS = {
     "analyse_ia": "Analyse du modèle IA",
     "constat_lcbft": "Constat LCB-FT",
     "empoisonnement": "Dérive du modèle semaine par semaine",
+    "perturbation": "Perturbation des entrées (modèle sain, sans réentraînement)",
+    "detection_avec_ia": "Détection si FRAUD_AI avait été disponible",
     "signaux_ignores": "Signaux ignorés par ARMS",
 }
+TX_LABELS = {"cyber": "Transactions falsifiées", "continuite": "Virements pendant la panne"}
 
 
 def facts(data):
@@ -47,7 +52,7 @@ def facts(data):
 def scenario_facts(result, keys):
     out = {LABELS[k]: result[k] for k in keys if k in result}
     if "transactions" in result:
-        out["Transactions falsifiées"] = sim.transactions_summary(result["transactions"])
+        out[TX_LABELS.get(result["id"], "Transactions")] = sim.transactions_summary(result["transactions"])
     else:
         out["Virements avant empoisonnement"] = sim.transactions_summary(result["transactions_avant_empoisonnement"])
         out["Virements après empoisonnement"] = sim.transactions_summary(result["transactions_apres_empoisonnement"])
@@ -99,7 +104,8 @@ OFF_ROLE = {  # titres de sections hors du rôle de l'agent (retirées)
     "ia_adversaire": r"r[ée]glement|r[ée]gulation|conformit|classification|\bai act|dora|mica|rgpd|lcb|[ée]carts|"
                      r"vuln[ée]rabilit[ée]s critiques|m[ée]thode grc|impact assessment|^impact sur",
     "impact": r"score|analyse (du|de) risque|^explication|registre|fournisseur|recommandation compl[ée]mentaire|"
-              r"classification|\bai act|m[ée]thode grc|\bbia\b|risk register|treatment plan",
+              r"classification|\bai act|m[ée]thode grc|\bbia\b|risk register|treatment plan|correctif",
+    "contre_test": r"r[ée]glement|r[ée]gulation|conformit|dora|mica|ai act|rgpd|score|registre|recommandation",
 }
 REGULATIONS = r"(?:DORA|MiCA|AI Act|RGPD|LCB-FT)"
 INLINE_REGULATORY = [  # Agent 2 : incises réglementaires au milieu d'une étape (retirées)
@@ -111,7 +117,9 @@ ROLE_TERMS = {  # mentions qui ne devraient plus apparaître (avertissement seul
     "reconnaissance": r"\b(DORA|MiCA|AI Act|RGPD)\b",
     "attaquant": r"\b(DORA|MiCA|AI Act|RGPD|conformes?|non-conformités?)\b",
     "ia_adversaire": r"\b(DORA|MiCA|AI Act|RGPD)\b",
+    "contre_test": r"\b(DORA|MiCA|AI Act|RGPD)\b",
 }
+CHOICE = re.compile(r"^.*correctif\s+(?:à|a)\s+tester\s*:?\s*\**\s*(?:n°\s*)?(\d+).*$", re.I | re.M)
 
 
 def clean_leaks(text):
@@ -205,9 +213,9 @@ def short_title(title):
     return title.split(":")[0].strip()[:60]
 
 
-def review(key, text, controls):
+def review(key, text, controls, name=None):
     """Contrôle déterministe d'une sortie d'agent ; chaque correction est consignée dans « controls »."""
-    name = AGENTS[key]["name"]
+    name = name or AGENTS[key]["name"]
     text, leaks = clean_leaks(text)
     if leaks:
         controls.append(leak_note(name, leaks))
@@ -273,7 +281,7 @@ def cell(text):
 
 
 def dependencies_block(archi):
-    lines = ["**Dépendances critiques (registre des tiers, calculé depuis les données)**"]
+    lines = ["**Dépendances critiques (registre des tiers, calculé depuis les données)**", ""]
     for v in archi["vendors"]:
         missing = [label for key, label in (("exit_plan", "plan de sortie"), ("contract_audit_clause", "clause d'audit"))
                    if not v[key]]
@@ -300,7 +308,7 @@ def vendor_table(archi):
             "| Fournisseur | Service | Critique | Plan de sortie | Clause d'audit |", "|---|---|---|---|---|"]
     rows += [f"| {v['name']} | {v['service']} | {yn(v['critical'])} | {yn(v['exit_plan'])} | {yn(v['contract_audit_clause'])} |"
              for v in archi["vendors"]]
-    rows.append("\n*Non comptés dans le score : écarts structurels du registre, non exploités par l'attaque.*")
+    rows.append("\n*Registre complet. Seuls les écarts exploités par l'attaque, dans le tableau ci-dessus, comptent dans le score.*")
     return "\n".join(rows)
 
 
@@ -308,7 +316,7 @@ def vendor_recommendation(archi):
     critical = [v for v in archi["vendors"] if v["critical"]]
     no_exit = [v["name"] for v in critical if not v["exit_plan"]]
     no_audit = [v["name"] for v in critical if not v["contract_audit_clause"]]
-    lines = ["**Recommandation complémentaire : registre des tiers (DORA art. 28 et 30)**"]
+    lines = ["**Recommandation complémentaire : registre des tiers (DORA art. 28 et 30)**", ""]
     if no_exit:
         lines.append(f"- Formaliser une stratégie de sortie pour : {', '.join(no_exit)}.")
     if no_audit:
@@ -318,10 +326,51 @@ def vendor_recommendation(archi):
 
 def score_block(score):
     d, e = score["detail"], score["explication"]
-    return "\n".join([f"**Score de risque : {score['score']} ({score['niveau']})**",
+    return "\n".join([f"**Score de risque : {score['score']:.2f} ({score['niveau']})**",
                       f"- Financier (40 %) : {d['financier']} - {e['financier']}",
                       f"- Réglementaire (35 %) : {d['reglementaire']} - {e['reglementaire']}",
                       f"- Réputation (25 %) : {d['reputation']} - {e['reputation']}"])
+
+
+def pick_fix(text, fixes):
+    """Lit « Correctif à tester : N » dans la réponse de l'Agent 5 ; retire la ligne du texte.
+
+    Retourne (correctif, texte, choisi_par_l_agent). Choix illisible : le premier correctif (point de rupture).
+    """
+    m = CHOICE.search(text)
+    n = int(m.group(1)) if m else 0
+    text = re.sub(r"\n{3,}", "\n\n", CHOICE.sub("", text)).strip()
+    if 1 <= n <= len(fixes):
+        return fixes[n - 1], text, True
+    return fixes[0], text, False
+
+
+def detection_of(result):
+    return result.get("transactions_detectees") or result["detection_apres"]
+
+
+def rows_of(result):
+    return result.get("transactions") or result["transactions_apres_empoisonnement"]
+
+
+def remediation_block(result, score, fix, fixed, fixed_score, chosen):
+    closed = [f"{r['texte']} - {r['exigence']}" for r in result["references"] if r["rid"] in fix["ferme"]]
+    eur = lambda n: f"{n:,} EUR".replace(",", " ")
+    who = {True: "par l'Agent 5", False: "par défaut (choix de l'Agent 5 absent ou illisible)", None: "par défaut (dry-run)"}[chosen]
+    return "\n".join([
+        f"**Correctif choisi {who} : {fix['label']}**", "",
+        f"Écart(s) fermé(s) : {' ; '.join(closed)}.", "",
+        "| | Avant | Après correctif |", "|---|---|---|",
+        f"| Détection | {detection_of(result)} | {detection_of(fixed)} |",
+        f"| Montant détourné | {eur(result['montant_detourne_eur'])} | {eur(fixed['montant_detourne_eur'])} |",
+        f"| Score de risque | {score['score']:.2f} ({score['niveau']}) | {fixed_score['score']:.2f} ({fixed_score['niveau']}) |",
+    ])
+
+
+def perturbation_table(probes):
+    rows = ["| Variante d'un virement de l'attaque | Score IA | Détecté |", "|---|---|---|"]
+    rows += [f"| {p['variante']} | {p['score IA']} | {p['détecté']} |" for p in probes]
+    return "\n".join(rows)
 
 
 def drift_table(drift):
@@ -333,10 +382,10 @@ def drift_table(drift):
 
 
 # --- Appels aux agents et orchestration --------------------------------------------
-def ask(key, prompt, dry_run=False):
+def ask(key, prompt, dry_run=False, mission=None):
     if dry_run:
         return f"*[dry-run] {AGENTS[key]['name']} : sortie non générée.*"
-    agent = build_agent(key)  # AgentError si agno est absent
+    agent = build_agent(key, mission=mission)  # AgentError si agno est absent
     try:
         response = agent.run(prompt + "\n\n/no_think")  # désactive le mode réflexion de qwen3
     except Exception as e:  # Ollama arrêté en cours de route, modèle déchargé, coupure...
@@ -385,7 +434,8 @@ def run(scenario, dry_run=False, on_step=None, reports_dir=None):
     out["ia_adversaire"] = (f"**Peut-on manipuler l'IA sans provoquer l'arrêt du système ? {verdict}**\n\n"
                             + agent("ia_adversaire", f"Réponse établie par le simulateur, à justifier sans la répéter : "
                                     f"{verdict}\n\n" + context + facts(scenario_facts(
-                                        result, ["titre", "etapes", "analyse_ia", "empoisonnement", "signaux_ignores"])))
+                                        result, ["titre", "etapes", "analyse_ia", "empoisonnement", "perturbation",
+                                                 "detection_avec_ia", "signaux_ignores"])))
                             + f"\n\n**Classification AI Act** : {result['classification_ai_act']}")
     show("ia_adversaire")
 
@@ -413,15 +463,41 @@ def run(scenario, dry_run=False, on_step=None, reports_dir=None):
                          + f"\n\n*Hors périmètre : {' ; '.join(result['hors_perimetre'])}.*\n\n" + vendor_table(archi))
     show("compliance")
 
-    # Agent 5 : score (code) + priorités et recommandations (LLM) + registre des tiers (code)
+    # Agent 5 : score (code) + priorités, recommandations et choix du correctif (LLM) + registre des tiers (code)
     scoring = score_block(score)
-    out["impact"] = (scoring + "\n\n"
-                     + agent("impact", f"{scoring}\n\nPoint de rupture : {result['point_de_rupture']}\n"
-                             f"Étapes de l'attaque :\n{facts(result['etapes'])}\n"
-                             f"Signaux ignorés par ARMS :\n{facts(result['signaux_ignores'])}\n\n"
-                             f"Non-conformités (Agent 4) :\n{findings_table(result, constats)}")
+    fixes = sim.FIXES[scenario]
+    menu = "\n".join(f"{i}. {f['label']}" for i, f in enumerate(fixes, 1))
+    raw = ask("impact", f"{scoring}\n\nPoint de rupture : {result['point_de_rupture']}\n"
+              f"Étapes de l'attaque :\n{facts(result['etapes'])}\n"
+              f"Signaux ignorés par ARMS :\n{facts(result['signaux_ignores'])}\n\n"
+              f"Non-conformités (Agent 4) :\n{findings_table(result, constats)}\n\n"
+              f"Correctifs simulables :\n{menu}", dry_run)
+    fix, raw, chosen = pick_fix(raw, fixes)
+    if not dry_run and not chosen:
+        controls.append(f"{AGENTS['impact']['name']} : choix du correctif absent ou illisible, correctif 1 appliqué par défaut.")
+    out["impact"] = (scoring + "\n\n" + (raw if dry_run else review("impact", raw, controls))
                      + "\n\n" + vendor_recommendation(archi))
     show("impact")
+
+    # Boucle de remédiation : le simulateur applique le correctif choisi, l'Agent 2 rejoue l'attaque
+    fixed = sim.SCENARIOS[scenario](fix=fix["id"])
+    fixed_score = sim.risk_score(fixed)
+    block = remediation_block(result, score, fix, fixed, fixed_score, None if dry_run else chosen)
+    others = [f["label"] for f in fixes if f is not fix]
+    left = fixed["montant_detourne_eur"]
+    verdict = (f"L'attaque est bloquée : {detection_of(fixed)} détectées, plus aucun euro détourné." if left == 0 else
+               f"L'attaque passe encore en partie : {detection_of(fixed)} détectées, {left:,} EUR détournés.".replace(",", " "))
+    counter = ask("attaquant", f"Verdict établi par le simulateur, à ne pas contredire : {verdict}\n\n"
+                  f"Étapes de ton attaque :\n{facts(result['etapes'])}\n\n{block}\n\n"
+                  f"Résultat simulé après correctif :\n{facts(sim.transactions_summary(rows_of(fixed)))}\n\n"
+                  f"Autres correctifs non appliqués :\n{facts(others)}", dry_run, mission="contre_test")
+    name = f"{AGENTS['attaquant']['name']} (contre-test)"
+    if not dry_run:
+        counter = review("contre_test", counter, controls, name=name)
+    out["remediation"] = f"{block}\n\n**Contre-test de l'Agent 2 : {verdict}**\n\n{counter}"
+    out["remediation_resultat"] = {"correctif": fix["label"], "choisi_par_agent": chosen,
+                                   "score_avant": score["score"], "score_apres": fixed_score["score"]}
+    step("Boucle de remédiation (Agent 5 → simulateur → Agent 2)", out["remediation"])
 
     out["rapport"] = save_report(out, reports_dir)
     return out
@@ -430,12 +506,17 @@ def run(scenario, dry_run=False, on_step=None, reports_dir=None):
 def save_report(out, reports_dir=REPORTS):
     r, s = out["scenario"], out["score"]
     md = [f"# Rapport Red Team ARMS - {r['titre']}", "",
-          f"**Score de risque : {s['score']} ({s['niveau']})** - montant détourné : {r['montant_detourne_eur']:,} EUR".replace(",", " "),
-          f"**Point de rupture :** {r['point_de_rupture']}", "", "## Étapes", *r["etapes"], ""]
+          f"**Score de risque : {s['score']:.2f} ({s['niveau']})** - montant détourné : {r['montant_detourne_eur']:,} EUR".replace(",", " "),
+          "", f"**Point de rupture :** {r['point_de_rupture']}", "", "## Étapes", *r["etapes"], ""]
+    if "detection_avec_ia" in r:
+        md += [f"**Détection si FRAUD_AI avait été disponible :** {r['detection_avec_ia']}", ""]
     if "empoisonnement" in r:
         md += ["## Dérive du modèle IA (simulateur)", drift_table(r["empoisonnement"]), ""]
+    if "perturbation" in r:
+        md += ["## Perturbation des entrées (modèle sain, sans réentraînement)", perturbation_table(r["perturbation"]), ""]
     for key in AGENTS:
         md += [f"## {AGENTS[key]['name']}", out[key], ""]
+    md += ["## Boucle de remédiation (Agent 5 → simulateur → Agent 2)", out["remediation"], ""]
     if out.get("dry_run"):
         checks = ["- Mode dry-run : aucune sortie LLM à contrôler."]
     else:

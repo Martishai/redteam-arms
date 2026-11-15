@@ -93,14 +93,16 @@ def test_parse_findings(llm, expected):
 def test_dry_run_without_llm(scenario, tmp_path):
     steps = []
     out = rt.run(scenario, dry_run=True, on_step=lambda name, text: steps.append(name), reports_dir=tmp_path)
-    assert len(steps) == 5 and out["controles"] == []
+    assert len(steps) == 6 and out["controles"] == []  # 5 agents + boucle de remédiation
     report = out["rapport"].read_text(encoding="utf-8")
     for block in ("**Point de rupture** :", "**Classification AI Act** :", "*Hors périmètre :",
                   "### Écarts structurels du registre des tiers", "**Recommandation complémentaire : registre des tiers",
-                  f"**Score de risque : {out['score']['score']} ({out['score']['niveau']})**",
-                  "Mode dry-run : aucune sortie LLM à contrôler."):
+                  f"**Score de risque : {out['score']['score']:.2f} ({out['score']['niveau']})**",
+                  "Mode dry-run : aucune sortie LLM à contrôler.",
+                  "## Boucle de remédiation", "**Correctif choisi par défaut (dry-run)"):
         assert block in report
     assert ("## Dérive du modèle IA (simulateur)" in report) == (scenario == "ia")
+    assert ("## Perturbation des entrées" in report) == (scenario == "ia")
     assert "agno" not in sys.modules  # le dry-run ne charge pas le framework
 
 
@@ -129,14 +131,23 @@ class FakeAgent:
         return SimpleNamespace(content=self.content, status="RunStatus.completed")
 
 
+def test_pick_fix():
+    fixes = sim.FIXES["ia"]
+    fix, text, chosen = rt.pick_fix("P1 : étiquettes.\n\n**Correctif à tester : 2**", fixes)
+    assert fix["id"] == "agregation" and chosen and "Correctif" not in text
+    fix, text, chosen = rt.pick_fix("Pas de choix.", fixes)
+    assert fix is fixes[0] and not chosen
+    assert rt.pick_fix("Correctif à tester : 9", fixes)[2] is False  # numéro hors liste
+
+
 def test_ask_wraps_model_errors(monkeypatch):
-    monkeypatch.setattr(rt, "build_agent", lambda key: FakeAgent(error=ConnectionError("connexion refusée")))
+    monkeypatch.setattr(rt, "build_agent", lambda key, mission=None: FakeAgent(error=ConnectionError("connexion refusée")))
     with pytest.raises(AgentError, match="ollama ps"):
         rt.ask("attaquant", "prompt")
-    monkeypatch.setattr(rt, "build_agent", lambda key: FakeAgent(content=""))
+    monkeypatch.setattr(rt, "build_agent", lambda key, mission=None: FakeAgent(content=""))
     with pytest.raises(AgentError, match="aucune réponse exploitable"):
         rt.ask("attaquant", "prompt")
-    monkeypatch.setattr(rt, "build_agent", lambda key: FakeAgent(content="<think>x</think>```markdown\n1. Étape\n```"))
+    monkeypatch.setattr(rt, "build_agent", lambda key, mission=None: FakeAgent(content="<think>x</think>```markdown\n1. Étape\n```"))
     assert rt.ask("attaquant", "prompt") == "1. Étape"
 
 
@@ -152,14 +163,17 @@ FAKE_OUTPUTS = {
                   "sans validation humaine : Constat un.\n2. Constat deux.\n4. Constat quatre.",
     "impact": "**Score de risque : 0.5 (Moyen)**\n\n### Hiérarchisation des vulnérabilités\n**P1** : étiquettes.\n\n"
               "### Recommandations\n1. Valider les étiquettes.\n\n"
-              "### Recommandation complémentaire : registre des tiers\n- CryptoCustody : clause d'audit manquante.",
+              "### Recommandation complémentaire : registre des tiers\n- CryptoCustody : clause d'audit manquante.\n\n"
+              "Correctif à tester : 2",
+    "contre_test": "Avec l'agrégation, mes 8 virements sont signalés. J'essaierais des comptes non liés (DORA).\n\n"
+                   "**Réglementation** : DORA.",
 }
 
 
 def test_full_run_with_fake_agents(monkeypatch, tmp_path):
     """Chaîne complète hors dry-run, sans Ollama : les erreurs typiques du LLM n'atteignent pas le rapport."""
     monkeypatch.setattr(rt, "check_ollama", lambda: None)
-    monkeypatch.setattr(rt, "build_agent", lambda key: FakeAgent(content=FAKE_OUTPUTS[key]))
+    monkeypatch.setattr(rt, "build_agent", lambda key, mission=None: FakeAgent(content=FAKE_OUTPUTS[mission or key]))
     out = rt.run("ia", reports_dir=tmp_path, on_step=lambda name, text: None)
     report = out["rapport"].read_text(encoding="utf-8")
     for wrong in ("modele_ia_manipule", "constat_lcbft", "catégorie 2", "pas de clause d'audit",
@@ -173,3 +187,9 @@ def test_full_run_with_fake_agents(monkeypatch, tmp_path):
     assert report.count("**Point de rupture** :") == 1
     assert report.count("Recommandation complémentaire : registre des tiers") == 1
     assert "## Contrôles automatiques des sorties" in report and len(out["controles"]) >= 6
+    assert "**Correctif choisi par l'Agent 5 : Agréger les montants par réseau de comptes liés" in report
+    assert "| Détection | 0/8 | 8/8 |" in report
+    assert "J'essaierais des comptes non liés" in report and "**Réglementation**" not in report
+    assert "**Contre-test de l'Agent 2 : L'attaque est bloquée : 8/8 détectées, plus aucun euro détourné.**" in report
+    assert "Correctif à tester" not in report
+    assert out["remediation_resultat"]["score_apres"] < out["remediation_resultat"]["score_avant"]

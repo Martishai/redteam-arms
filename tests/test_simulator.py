@@ -1,4 +1,6 @@
-"""Tests du simulateur : détection, empoisonnement réel, gravités, score, registre des tiers."""
+"""Tests du simulateur : détection, empoisonnement réel, perturbation, correctifs, gravités, score, registre."""
+import pytest
+
 import arms_simulator as sim
 
 
@@ -15,7 +17,7 @@ def test_scenario_cyber():
     assert r["montant_detourne_eur"] == 55_000
     assert r["modele_ia_manipule"] is False
     assert all(t["score_ia"] < sim.ALERT_THRESHOLD and t["alertes_lcbft"] == [] for t in r["transactions"])
-    assert r["facteurs_reglementaires"] == {"DORA": 3, "MiCA": 3, "LCB-FT": 3}
+    assert r["facteurs_reglementaires"] == {"DORA": 3, "MiCA": 3, "LCB-FT": 3, "RGPD": 2}
     score = sim.risk_score(r)
     assert (score["score"], score["niveau"]) == (0.82, "Élevé")
 
@@ -28,6 +30,45 @@ def test_scenario_ia_detection_and_score():
     assert r["facteurs_reglementaires"] == {"AI Act": 1, "DORA": 2, "LCB-FT": 3}
     score = sim.risk_score(r)
     assert (score["score"], score["niveau"]) == (0.79, "Élevé")
+
+
+def test_scenario_continuite():
+    r = sim.scenario_continuite()
+    assert r["transactions_detectees"] == "1/6" and r["detection_avec_ia"] == "6/6"
+    assert all(t["score_ia"] is None for t in r["transactions"])  # FRAUD_AI indisponible
+    assert r["montant_detourne_eur"] == 40_000
+    assert r["facteurs_reglementaires"] == {"DORA": 3, "LCB-FT": 2}
+    score = sim.risk_score(r)
+    assert (score["score"], score["niveau"]) == (0.6, "Moyen")
+
+
+def test_rgpd_breach_is_reported_in_cyber_scenario():
+    rgpd = [r for r in sim.scenario_cyber()["references"] if r["texte"] == "RGPD"]
+    assert len(rgpd) == 1 and "art. 32 et 33" in rgpd[0]["exigence"] and "CNIL" in rgpd[0]["ecart"]
+
+
+def test_input_perturbation_probes():
+    probes = {p["variante"].split(" :")[0].split(" (")[0]: p for p in sim.scenario_ia()["perturbation"]}
+    assert probes["Référence"]["détecté"] == "oui"
+    assert probes["Montant réduit de 10 %"]["détecté"] == "oui"   # robuste aux petites variations
+    assert probes["Un seul champ falsifié"]["détecté"] == "non"    # mais pas à un champ falsifié
+    assert probes["Un seul champ falsifié"]["score IA"] < 0.2
+
+
+@pytest.mark.parametrize("scenario", list(sim.SCENARIOS))
+def test_every_fix_is_simulated_and_lowers_the_score(scenario):
+    base = sim.SCENARIOS[scenario]()
+    for fix in sim.FIXES[scenario]:
+        fixed = sim.SCENARIOS[scenario](fix=fix["id"])
+        assert fixed["montant_detourne_eur"] < base["montant_detourne_eur"]
+        assert sim.risk_score(fixed)["score"] < sim.risk_score(base)["score"]
+        assert not {r["rid"] for r in fixed["references"]} & set(fix["ferme"])  # écarts fermés retirés
+        assert set(fix["ferme"]) <= {r["rid"] for r in base["references"]}
+
+
+def test_drift_monitor_stops_poisoning_at_week_1():
+    assert sim.first_drift_alert(sim.models()) == 1
+    assert sim.scenario_ia(fix="surveillance_derive")["detection_apres"] == "8/8"
 
 
 def test_poisoning_comes_from_retraining():

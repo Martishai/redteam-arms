@@ -11,7 +11,8 @@ st.title("Red Team agentique - ARMS")
 st.caption(f"5 agents Agno · modèle local Ollama `{MODEL_ID}` · système ARMS fictif (exercice pédagogique)")
 
 labels = {"cyber": "Scénario 1 - Attaque cyber (fournisseur crypto compromis)",
-          "ia": "Scénario 2 - Attaque IA (empoisonnement + contournement LCB-FT)"}
+          "ia": "Scénario 2 - Attaque IA (empoisonnement + contournement LCB-FT)",
+          "continuite": "Scénario 3 - Résilience (panne de l'hébergeur CloudHost)"}
 scenario = st.sidebar.radio("Scénario", list(labels), format_func=labels.get)
 dry_run = st.sidebar.checkbox("Mode test sans LLM (dry-run)")
 
@@ -19,7 +20,7 @@ result = sim.SCENARIOS[scenario]()
 score = sim.risk_score(result)
 
 c1, c2, c3 = st.columns(3)
-c1.metric("Score de risque", f"{score['score']} / 1", score["niveau"])
+c1.metric("Score de risque", f"{score['score']:.2f} / 1", score["niveau"])
 c2.metric("Montant détourné", f"{result['montant_detourne_eur']:,} €".replace(",", " "))
 c3.metric("Détection ARMS", result.get("transactions_detectees") or
           f"{result['detection_avant']} → {result['detection_apres']}")
@@ -42,8 +43,24 @@ if scenario == "ia":
     g2.caption("Poids appris par le modèle (régression logistique)")
     g2.line_chart(drift[["wallet nouveau", "montant"]])
     st.dataframe(drift, width="stretch")
+
+    st.subheader("Perturbation des entrées (modèle sain, sans réentraînement)")
+    st.dataframe(pd.DataFrame(result["perturbation"]), width="stretch", hide_index=True)
+    st.caption("Le modèle résiste aux petites variations de montant ou de vélocité, mais pas à un seul champ falsifié.")
 else:
     st.dataframe(pd.DataFrame(result["transactions"])[cols], width="stretch")
+    if "detection_avec_ia" in result:
+        st.caption(f"Si FRAUD_AI avait été disponible : {result['detection_avec_ia']} détectées.")
+
+st.subheader("Correctifs simulables")
+fixes = []
+for fix in sim.FIXES[scenario]:
+    fixed = sim.SCENARIOS[scenario](fix=fix["id"])
+    fixes.append({"correctif": fix["label"],
+                  "détection après": fixed.get("transactions_detectees") or fixed["detection_apres"],
+                  "score après": f"{sim.risk_score(fixed)['score']:.2f}"})
+st.dataframe(pd.DataFrame(fixes), width="stretch", hide_index=True)
+st.caption("Pendant la Red Team, l'Agent 5 en choisit un, le simulateur l'applique et l'Agent 2 rejoue l'attaque.")
 
 st.subheader("Analyse des agents")
 if st.button("Lancer la Red Team", type="primary"):

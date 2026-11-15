@@ -129,6 +129,11 @@ def test_check_ollama_ok(monkeypatch):
     agents.check_ollama()
 
 
+def test_counter_test_mission_replaces_the_role():
+    text = "\n".join(agents.instructions_for("attaquant", mission="contre_test"))
+    assert "rejoues ton attaque" in text and "UNIQUEMENT ces lignes numérotées" not in text
+
+
 def test_build_agent_without_agno(monkeypatch):
     monkeypatch.setitem(sys.modules, "agno", None)
     monkeypatch.setitem(sys.modules, "agno.agent", None)

@@ -53,6 +53,15 @@ AGENTS = {
                  "Ta réponse contient UNIQUEMENT ces lignes numérotées : pas de titre, pas de point de rupture, pas de conclusion.",
                  "Ne parle pas de conformité ni de réglementation (ni DORA, ni MiCA, ni AI Act, ni « conforme ») : c'est le rôle de l'Agent 4.",
                  "Si un « Constat LCB-FT » est fourni, appuie-toi dessus pour expliquer pourquoi le LCB-FT n'a rien vu."],
+        # Seconde mission, dans la boucle de remédiation : rejouer l'attaque contre ARMS corrigé.
+        "missions": {"contre_test": [
+            "Tu es l'attaquant : tu rejoues ton attaque contre ARMS après le correctif indiqué.",
+            "Le verdict (attaque bloquée ou non) est affiché au-dessus de ta réponse, calculé par le simulateur : "
+            "ne le répète pas et ne le contredis jamais.",
+            "En 2 à 4 phrases : explique quel contrôle t'arrête (ou ce qui passe encore), décris la variante que tu "
+            "tenterais pour contourner ce correctif, puis nomme la faille qui resterait exploitable tant que les autres "
+            "correctifs listés ne sont pas appliqués.",
+            "Pas de titre, pas de réglementation, pas de score."]},
         "skills": ["logging-and-monitoring-evidence-pack"],
     },
     "ia_adversaire": {
@@ -87,7 +96,9 @@ AGENTS = {
                  "vulnérabilités exploitées pendant l'attaque (étapes, signaux ignorés, non-conformités).",
                  "Puis une section « Recommandations » : 3 à 5 actions concrètes, chacune rattachée à une vulnérabilité (P1, P2...).",
                  "Ne traite pas le registre des tiers (ajouté par le code). Ne propose jamais un seuil déjà en place "
-                 "(10 000 EUR, 5 opérations) : vise ce qui a manqué."],
+                 "(10 000 EUR, 5 opérations) : vise ce qui a manqué.",
+                 "Termine par une ligne exacte « Correctif à tester : N », où N est le numéro, dans la liste des correctifs "
+                 "simulables fournie, de celui qui traite ta P1. Le simulateur l'appliquera et l'Agent 2 rejouera l'attaque."],
         "skills": ["business-impact-analysis", "risk-register-first-pass", "risk-treatment-plan-drafting"],
     },
 }
@@ -141,9 +152,9 @@ def load_skill(name, skills_dir=None):
     return ""
 
 
-def instructions_for(key):
+def instructions_for(key, mission=None):
     spec = AGENTS[key]
-    instr = COMMON + spec["role"]
+    instr = COMMON + (spec["missions"][mission] if mission else spec["role"])
     for skill in spec["skills"]:
         text = load_skill(skill)
         if text:
@@ -181,7 +192,7 @@ def check_ollama(timeout=5):
                          f"Modèles présents : {', '.join(names) or 'aucun'}.")
 
 
-def build_agent(key):
+def build_agent(key, mission=None):
     try:
         from agno.agent import Agent
         from agno.models.ollama import Ollama
@@ -190,8 +201,8 @@ def build_agent(key):
                          "Active le venv puis lance « pip install -r requirements.txt ».") from e
 
     return Agent(
-        name=AGENTS[key]["name"],
+        name=AGENTS[key]["name"] + (f" ({mission})" if mission else ""),
         model=Ollama(id=MODEL_ID, options={"num_ctx": NUM_CTX, "temperature": 0.1}),
-        instructions=instructions_for(key),
+        instructions=instructions_for(key, mission),
         markdown=True,
     )
